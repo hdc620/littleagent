@@ -1,0 +1,36 @@
+# ---- secrets ----
+.env
+.env.local
+.env.*.local
+*.key
+
+# ---- build output ----
+target/
+# 本地沙箱用的隔离 Maven 仓库（见 README 说明，正常开发不需要）
+.m2repo/
+out/
+build/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- runtime artifacts ----
+logs/
+traces/
+*.jsonl
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+nbproject/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
