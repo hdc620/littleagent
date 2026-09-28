@@ -3,7 +3,6 @@ package com.miniagent.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.miniagent.llm.ToolCall;
-import com.miniagent.trace.TraceEvent;
 import com.miniagent.trace.TraceTypes;
 import com.miniagent.trace.Tracer;
 import com.miniagent.util.Json;
@@ -122,11 +121,6 @@ public final class ToolInvoker implements AutoCloseable {
     @Override
     public void close() {
         executor.shutdownNow();
-    }
-
-    /** trace 事件流（测试用）。 */
-    public static List<TraceEvent> eventsOf(Tracer tracer) {
-        return tracer.events();
     }
 
     private static final class DaemonThreadFactory implements ThreadFactory {

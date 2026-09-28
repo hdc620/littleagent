@@ -1,0 +1,9 @@
+# 统一换行符，避免 Windows/macOS 协作时的整文件 diff
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.jar binary
+*.png binary
+*.jpg binary
+*.docx binary
+*.xlsx binary
