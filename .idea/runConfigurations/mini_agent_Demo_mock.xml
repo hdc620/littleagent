@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="mini-agent · 演示脚本（离线 mock，无需 API Key）" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.miniagent.Main" />
+    <module name="mini-agent" />
+    <option name="PROGRAM_PARAMETERS" value="--mock --demo" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

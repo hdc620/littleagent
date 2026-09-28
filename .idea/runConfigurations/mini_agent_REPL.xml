@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="mini-agent · REPL（真实 API，多窗口）" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.miniagent.Main" />
+    <module name="mini-agent" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

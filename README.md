@@ -1,10 +1,10 @@
-# mini-agent —— 从零实现的最小可用 Agent（Java）
+﻿# mini-agent —— 从零实现的最小可用 Agent（Java）
 
 > 一个**不依赖任何 Agent 框架**的最小可用 Agent Runtime：自研 ReAct 主循环、工具注册与 Schema 驱动决策、
 > LLM 输出解析、多 session 隔离、上下文旅程压缩与记忆召回、异常处理与全链路 trace。
 > 使用**真实 LLM API**（DeepSeek / 任意 OpenAI 兼容网关）。
 
-[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-157%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
+[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-163%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
 
 ---
 
@@ -68,7 +68,7 @@ cp .env.example .env.local      # Windows: copy .env.example .env.local
 ### 2.3 编译与测试
 
 ```bash
-mvn clean package                 # 编译 + 跑 157 个单元测试 + 打可执行 jar → target/mini-agent.jar
+mvn clean package                 # 编译 + 跑 163 个单元测试 + 打可执行 jar → target/mini-agent.jar
 mvn verify                        # 额外跑 5 个真实 API 集成测试（无 Key 时自动跳过）
 mvn "-Dtest=AgentLoopTest" test    # 只跑某个测试类
 ```
@@ -101,6 +101,41 @@ java "-Dstdout.encoding=UTF-8" -jar target/mini-agent.jar --demo
 REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（列出窗口）、`/history`、`/memory`（看工作记忆与摘要）、
 `/trace`、`/compact`（手动压缩）、`/verbose`、`/exit`。
 
+### 2.5 在 IntelliJ IDEA 中运行
+
+**可以直接用 IDEA 运行**，标准 Maven 工程，无需额外配置。
+
+1. **导入**：`File → Open` → 选中项目根目录的 `pom.xml` → `Open as Project`（IDEA 自动 Maven 导入）。
+2. **确认 SDK**：`File → Project Structure → Project`，SDK 选 **JDK 17 或更高**（`pom.xml` 里编译目标是 `release 17`），
+   Language level 选 17。建议同时确认 `Settings → Build → Build Tools → Maven → Runner` 的 JRE 与项目一致。
+3. **运行入口**：右键 `src/main/java/com/miniagent/Main.java` → `Run 'Main.main()'`。
+   不传参数即进入**交互式多窗口 REPL**（IDEA 控制台可以直接输入中文）。
+4. **已内置 5 个 Run Configuration**（`.idea/runConfigurations/`，导入后自动出现在运行下拉框里）：
+
+   | 运行配置 | 效果 | 需要 API Key |
+   | --- | --- | --- |
+   | `mini-agent · REPL（真实 API，多窗口）` | 交互式多窗口对话 | 是 |
+   | `mini-agent · 演示脚本（真实 API，6 个场景）` | `--demo`，一键跑完题目场景 | 是 |
+   | `mini-agent · 演示脚本（离线 mock，无需 API Key）` | `--mock --demo`，零网络请求跑通全链路 | 否 |
+   | `mini-agent · 单轮问答 + trace` | `--trace --once "..."` | 是 |
+   | `mini-agent · 真实 API 集成测试（需 Key）` | 直接跑 `DeepSeekLiveIT` 5 个用例 | 是 |
+
+   > 若下拉框提示 `Module not specified`，手动选一下 `mini-agent` 模块即可（IDEA 按 artifactId 生成模块名）。
+
+5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（163 个单元测试，离线，几秒）。
+   `DeepSeekLiveIT` 也可以直接右键运行——IDEA 不区分 failsafe，`@Test` 就会执行；没有 Key 时它会自动 skip。
+
+6. **三个常见坑**（前两个已修复，列出来便于排查）：
+
+   | 现象 | 原因 | 处理 |
+   | --- | --- | --- |
+   | 启动即报「未检测到 DEEPSEEK_API_KEY」 | Working directory 不在项目内，`.env.local` 找不到 | Run Configuration 的 `Working directory` 设为 `$PROJECT_DIR$`（内置配置已设好）；`.env.local` 与 `docs/knowledge` 都会从 CWD 向上查找最多 4 层 |
+   | `search` 一直返回「知识库为空」 | 同上，工作目录不在项目内 | 同上；只要 CWD 在项目目录树内即可自动定位，已由 `DefaultToolsTest` 覆盖 |
+   | 控制台中文乱码（少数老版本） | 控制台编码非 UTF-8 | `Help → Edit Custom VM Options` 加 `-Dfile.encoding=UTF-8`，或 `Settings → Editor → File Encodings` 全部设为 UTF-8 |
+
+7. **可以不用的东西**：项目根目录的 `.m2repo/`（约 25 MB）是我在受限沙箱里临时使用的隔离 Maven 仓库，
+   正常用 IDEA/本机 Maven 时**可以直接删掉**，它已被 `.gitignore` 忽略，也没有进版本库。
+
 ---
 
 ## 3. 需求对照表
@@ -126,7 +161,7 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 | 异常处理 | 异常体系 + 8 项工具防护 + LLM 重试 | `ToolInvokerTest`、`AgentLoopTest#llmFailureBecomesResult` |
 | 工具 trace / 执行日志 | `Tracer` + `JsonlTraceSink` | `TraceTest`（8 例） |
 | 真实 LLM API | `OpenAiCompatibleClient` → DeepSeek | `DeepSeekLiveIT`（5 例）+ 第 10 节实测记录 |
-| 测试用例 | 157 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
+| 测试用例 | 163 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
 
 ---
 
@@ -348,7 +383,7 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 ### 9.1 运行
 
 ```bash
-mvn test        # 157 个单元测试（离线，约 3 秒，不花 API 费用）
+mvn test        # 163 个单元测试（离线，约 3 秒，不花 API 费用）
 mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 ```
 
@@ -436,7 +471,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 │   ├── DEMO.md / DEMO-mock.md   真实 API / 离线 运行记录
 │   └── knowledge/*.md           内置知识库（search/read_docs 的数据源）
 ├── src/main/java/com/miniagent/ 源码（见第 4 节分层）
-├── src/test/java/com/miniagent/ 测试（157 单元 + 5 集成）
+├── src/test/java/com/miniagent/ 测试（163 单元 + 5 集成）
 └── logs/                        运行期 trace（JSONL，已 gitignore）
 ```
 

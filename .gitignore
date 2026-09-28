@@ -20,7 +20,9 @@ traces/
 *.jsonl
 
 # ---- IDE ----
-.idea/
+# 保留共享的 Run Configuration，其余 .idea 内容忽略
+.idea/*
+!.idea/runConfigurations/
 *.iml
 *.ipr
 *.iws

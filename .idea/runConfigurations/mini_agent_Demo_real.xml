@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="mini-agent · 演示脚本（真实 API，6 个场景）" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.miniagent.Main" />
+    <module name="mini-agent" />
+    <option name="PROGRAM_PARAMETERS" value="--demo" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
