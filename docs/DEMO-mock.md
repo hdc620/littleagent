@@ -1,4 +1,4 @@
-﻿# 离线 mock 模式运行记录（无需 API Key）
+# 离线 mock 模式运行记录（无需 API Key）
 
 - 模型：`MockLlmClient`（关键词规则假模型，**不发任何网络请求**）
 - 命令：`java -jar target/mini-agent.jar --mock --demo --max-context-tokens 1200`

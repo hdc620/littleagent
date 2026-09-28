@@ -1,4 +1,4 @@
-﻿# mini-agent —— 从零实现的最小可用 Agent（Java）
+# mini-agent —— 从零实现的最小可用 Agent（Java）
 
 > 一个**不依赖任何 Agent 框架**的最小可用 Agent Runtime：自研 ReAct 主循环、工具注册与 Schema 驱动决策、
 > LLM 输出解析、多 session 隔离、上下文旅程压缩与记忆召回、异常处理与全链路 trace。

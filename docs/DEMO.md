@@ -1,4 +1,4 @@
-﻿# 真实 DeepSeek API 运行记录
+# 真实 DeepSeek API 运行记录
 
 - 模型：`deepseek-chat`（OpenAI 兼容 `/v1/chat/completions`）
 - 命令：`java -jar target/mini-agent.jar --demo --max-context-tokens 2500`
