@@ -1,7 +1,7 @@
 # 离线 mock 模式运行记录（无需 API Key）
 
 - 模型：`MockLlmClient`（关键词规则假模型，**不发任何网络请求**）
-- 命令：`java -jar target/mini-agent.jar --mock --demo --max-context-tokens 1200`
+- 命令：`java -jar target/little-agent.jar --mock --demo --max-context-tokens 1200`
 - 用途：没有 API Key 的评审者也能验证 Runtime 的完整链路（循环/工具/session 隔离/压缩/记忆/trace）。
 - 说明：mock 模型不做推理，只做模式匹配，因此回答措辞机械，但**决策路径与真实模型一致**。
 
@@ -11,7 +11,7 @@
 > 演示脚本里"并发调用两个工具"的措辞也已改为"一轮内一次请求发起两个工具调用（当前按顺序串行执行）"。
 
 ```text
-################ mini-agent 演示脚本 ################
+################ little-agent 演示脚本 ################
 模型: MockLlmClient（离线演示）
 用户: A
 

@@ -1,7 +1,7 @@
-# mini-agent Java 接口文档
+# little-agent Java 接口文档
 
-> 版本：v1.0.0 ｜ 语言：Java 17 ｜ 包根：`com.miniagent`
-> 适用对象：想接入 mini-agent、替换其中某一层、或新增工具/LLM/Session 存储的开发者。
+> 版本：v1.0.0 ｜ 语言：Java 17 ｜ 包根：`com.littleagent`
+> 适用对象：想接入 little-agent、替换其中某一层、或新增工具/LLM/Session 存储的开发者。
 > 本文件描述的是**当前代码的真实签名**，与 `src/main/java` 一一对应。
 
 ---
@@ -19,7 +19,7 @@
 ### 包结构总览
 
 ```
-com.miniagent
+com.littleagent
 ├── Main                          命令行入口
 ├── cli/  Repl, DemoScenarios     交互式多窗口 REPL / 演示脚本
 ├── core/ AgentRuntime, AgentConfig, AgentResult    Agent 主循环与配置
@@ -42,7 +42,7 @@ com.miniagent
 ## 1. 快速接入（最小可用示例）
 
 ```java
-import com.miniagent.core.*;
+import com.littleagent.core.*;
 
 AgentConfig config = AgentConfig.fromEnv();          // 读 DEEPSEEK_API_KEY / .env.local
 try (AgentRuntime runtime = AgentRuntime.createDefault(config)) {
@@ -64,7 +64,7 @@ try (AgentRuntime runtime = AgentRuntime.createDefault(config)) {
 
 ## 2. 核心接口：`AgentRuntime`
 
-`com.miniagent.core.AgentRuntime` —— Agent 主循环（自研，不依赖任何 Agent 框架）。
+`com.littleagent.core.AgentRuntime` —— Agent 主循环（自研，不依赖任何 Agent 框架）。
 
 ```java
 public final class AgentRuntime implements AutoCloseable {
@@ -174,10 +174,10 @@ public final class AgentConfig {
 
 ### 3.2 对应环境变量
 
-`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`MINI_AGENT_MAX_STEPS`、
-`MINI_AGENT_MAX_CONTEXT_TOKENS`、`MINI_AGENT_KEEP_RECENT_TURNS`、`MINI_AGENT_RECALL_TOP_K`、
-`MINI_AGENT_TOOL_TIMEOUT_MS`、`MINI_AGENT_MAX_TOOL_RESULT_CHARS`、`MINI_AGENT_TEMPERATURE`、
-`MINI_AGENT_LOG_DIR`、`MINI_AGENT_TRACE_CONSOLE`、`MINI_AGENT_MOCK`。
+`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`LITTLE_AGENT_MAX_STEPS`、
+`LITTLE_AGENT_MAX_CONTEXT_TOKENS`、`LITTLE_AGENT_KEEP_RECENT_TURNS`、`LITTLE_AGENT_RECALL_TOP_K`、
+`LITTLE_AGENT_TOOL_TIMEOUT_MS`、`LITTLE_AGENT_MAX_TOOL_RESULT_CHARS`、`LITTLE_AGENT_TEMPERATURE`、
+`LITTLE_AGENT_LOG_DIR`、`LITTLE_AGENT_TRACE_CONSOLE`、`LITTLE_AGENT_MOCK`。
 
 ---
 

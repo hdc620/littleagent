@@ -1,10 +1,10 @@
-# mini-agent —— 从零实现的最小可用 Agent（Java）
+# little-agent —— 从零实现的最小可用 Agent（Java）
 
 > 一个**不依赖任何 Agent 框架**的最小可用 Agent Runtime：自研 ReAct 主循环、工具注册与 Schema 驱动决策、
 > LLM 输出解析、多 session 隔离、上下文旅程压缩与记忆召回、异常处理与全链路 trace。
 > 使用**真实 LLM API**（DeepSeek / 任意 OpenAI 兼容网关）。
 
-[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-188%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
+[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-216%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
 
 ---
 
@@ -34,7 +34,7 @@
 
 | 能力 | 实现 |
 | --- | --- |
-| Agent 主循环 | `com.miniagent.core.AgentRuntime`（step1 输入 → step2 决策 → step3 工具 → step4 收尾/继续） |
+| Agent 主循环 | `com.littleagent.core.AgentRuntime`（step1 输入 → step2 决策 → step3 工具 → step4 收尾/继续） |
 | 工具注册机制 | `Tool` SPI + `ToolRegistry`（名称/描述/JSON Schema），LLM 基于 Schema 自主决策 |
 | 输出解析 | `LlmOutputParser`：原生 `tool_calls` + 三类文本兜底（`<tool_call>` / JSON 代码块 / ReAct），抽取思考过程 |
 | 3+ 工具 | `calculator`（自研表达式求值器）、`search`（mock 检索）、`read_docs`、`todo`（有状态）、`weather`（mock 数据源） |
@@ -68,7 +68,7 @@ cp .env.example .env.local      # Windows: copy .env.example .env.local
 ### 2.3 编译与测试
 
 ```bash
-mvn clean package                 # 编译 + 跑 188 个单元测试 + 打可执行 jar → target/mini-agent.jar
+mvn clean package                 # 编译 + 跑 216 个单元测试 + 打可执行 jar → target/little-agent.jar
 mvn verify                        # 额外跑 5 个真实 API 集成测试（无 Key 时自动跳过）
 mvn "-Dtest=AgentLoopTest" test    # 只跑某个测试类
 ```
@@ -77,7 +77,7 @@ mvn "-Dtest=AgentLoopTest" test    # 只跑某个测试类
 
 ```bash
 # ① 交互式多窗口 REPL（真实 API）
-java -jar target/mini-agent.jar
+java -jar target/little-agent.jar
 A@w1> 帮我查一下北京今天的天气，然后记个待办：给张总发周报
 A@w1> /new 周报窗口          # 新开窗口 w2
 A@w2> 我要写本周周报，先查一下知识库里的周报模板，然后记个待办：周五前提交周报
@@ -87,17 +87,17 @@ A@w1> 我刚才让你记的待办是什么？
 # ② 一键跑完题目里的 6 个场景（推荐给评审）
 #    `--demo` 会自动把上下文预算收到 2000（旧默认 6000 时场景 6「超预算自动压缩」压根不触发）；
 #    想用别的预算就显式加 --max-context-tokens <n>
-java -jar target/mini-agent.jar --demo
+java -jar target/little-agent.jar --demo
 
 # ③ 没有 API Key：离线假模型跑通全链路（不产生任何网络请求）
-java -jar target/mini-agent.jar --mock --demo
+java -jar target/little-agent.jar --mock --demo
 
 # ④ 单轮问答 + 查看 trace
-java -jar target/mini-agent.jar --once "帮我算一下 1234*5678+sqrt(144)，再记个待办：对账"
-java -jar target/mini-agent.jar --trace --once "北京天气怎么样"
+java -jar target/little-agent.jar --once "帮我算一下 1234*5678+sqrt(144)，再记个待办：对账"
+java -jar target/little-agent.jar --trace --once "北京天气怎么样"
 
 # 中文乱码时（Windows 控制台）：先 chcp 65001，或加 -Dstdout.encoding=UTF-8
-java "-Dstdout.encoding=UTF-8" -jar target/mini-agent.jar --demo
+java "-Dstdout.encoding=UTF-8" -jar target/little-agent.jar --demo
 ```
 
 REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（列出窗口）、`/history`、`/memory`（看工作记忆与摘要）、
@@ -116,15 +116,15 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 
    | 运行配置 | 效果 | 需要 API Key |
    | --- | --- | --- |
-   | `mini-agent · REPL（真实 API，多窗口）` | 交互式多窗口对话 | 是 |
-   | `mini-agent · 演示脚本（真实 API，6 个场景）` | `--demo`，一键跑完题目场景 | 是 |
-   | `mini-agent · 演示脚本（离线 mock，无需 API Key）` | `--mock --demo`，零网络请求跑通全链路 | 否 |
-   | `mini-agent · 单轮问答 + trace` | `--trace --once "..."` | 是 |
-   | `mini-agent · 真实 API 集成测试（需 Key）` | 直接跑 `DeepSeekLiveIT` 5 个用例 | 是 |
+   | `little-agent · REPL（真实 API，多窗口）` | 交互式多窗口对话 | 是 |
+   | `little-agent · 演示脚本（真实 API，6 个场景）` | `--demo`，一键跑完题目场景 | 是 |
+   | `little-agent · 演示脚本（离线 mock，无需 API Key）` | `--mock --demo`，零网络请求跑通全链路 | 否 |
+   | `little-agent · 单轮问答 + trace` | `--trace --once "..."` | 是 |
+   | `little-agent · 真实 API 集成测试（需 Key）` | 直接跑 `DeepSeekLiveIT` 5 个用例 | 是 |
 
-   > 若下拉框提示 `Module not specified`，手动选一下 `mini-agent` 模块即可（IDEA 按 artifactId 生成模块名）。
+   > 若下拉框提示 `Module not specified`，手动选一下 `little-agent` 模块即可（IDEA 按 artifactId 生成模块名）。
 
-5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（188 个单元测试，离线，几秒）。
+5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（216 个单元测试，离线，几秒）。
    `DeepSeekLiveIT` 也可以直接右键运行——IDEA 不区分 failsafe，`@Test` 就会执行；没有 Key 时它会自动 skip。
 
 6. **三个常见坑**（前两个已修复，列出来便于排查）：
@@ -163,7 +163,7 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 | 异常处理 | 异常体系 + 9 项工具防护 + LLM 重试 | `ToolInvokerTest`、`AgentLoopTest#llmFailureBecomesResult` |
 | 工具 trace / 执行日志 | `Tracer` + `JsonlTraceSink` | `TraceTest`（8 例） |
 | 真实 LLM API | `OpenAiCompatibleClient` → DeepSeek | `DeepSeekLiveIT`（5 例）+ 第 10 节实测记录 |
-| 测试用例 | 188 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
+| 测试用例 | 216 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
 
 ---
 
@@ -389,7 +389,7 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 ### 9.1 运行
 
 ```bash
-mvn test        # 188 个单元测试（离线，约 3 秒，不花 API 费用）
+mvn test        # 216 个单元测试（离线，约 3 秒，不花 API 费用）
 mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 ```
 
@@ -427,7 +427,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 
 ## 10. 真实 API 运行记录
 
-模型：`deepseek-chat` ｜ 命令：`java -jar target/mini-agent.jar --demo --max-context-tokens 2000`
+模型：`deepseek-chat` ｜ 命令：`java -jar target/little-agent.jar --demo --max-context-tokens 2000`
 完整记录：[`docs/DEMO.md`](docs/DEMO.md)（离线 mock 版：[`docs/DEMO-mock.md`](docs/DEMO-mock.md)）
 > 注：`--demo` 现已默认把预算收到 2000，这里显式写出来是为了标注当时实际使用的预算。
 
@@ -482,7 +482,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 │   ├── DEMO.md / DEMO-mock.md   真实 API / 离线 运行记录
 │   └── knowledge/*.md           内置知识库（search/read_docs 的数据源）
 ├── src/main/java/com/miniagent/ 源码（见第 4 节分层）
-├── src/test/java/com/miniagent/ 测试（188 单元 + 5 集成）
+├── src/test/java/com/miniagent/ 测试（216 单元 + 5 集成）
 └── logs/                        运行期 trace（JSONL）；运行期才产生，未提交（`.gitignore` 忽略 `logs/` 与 `*.jsonl`）
 ```
 
@@ -493,7 +493,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 本仓库已经是本地 git 仓库（含分阶段提交历史）。推送到远端：
 
 ```bash
-git remote add origin git@github.com:<你的用户名>/mini-agent.git
+git remote add origin git@github.com:<你的用户名>/little-agent.git
 git branch -M main
 git push -u origin main
 ```

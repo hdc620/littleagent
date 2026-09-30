@@ -8,7 +8,7 @@
 ## 1. 运行方式
 
 ```bash
-mvn test                       # 188 个单元测试（离线、约 3 秒、零 API 费用）
+mvn test                       # 216 个单元测试（离线、约 3 秒、零 API 费用）
 mvn verify                     # 额外运行 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 mvn "-Dtest=AgentLoopTest" test             # 单个测试类
 mvn "-Dtest=AgentLoopTest#forcesWrapUpAtMaxSteps" test   # 单个用例
@@ -19,7 +19,7 @@ mvn "-Dmaven.repo.local=.m2repo" test       # 仅在受限沙箱中需要（本�
 
 | 阶段 | 用例数 | 结果 |
 | --- | --- | --- |
-| `mvn test`（单元） | 188 | ✅ 全部通过 |
+| `mvn test`（单元） | 216 | ✅ 全部通过 |
 | `mvn verify`（含真实 API） | +5 | ✅ 全部通过（无 Key 时 skip） |
 
 ---
@@ -231,7 +231,7 @@ CJK bigram 分词与**标点排除**（回归问题 3）、单字保留、token 
 ## 5. 覆盖度自检
 
 ```bash
-mvn test                       # 188 passed
+mvn test                       # 216 passed
 mvn verify                     # + 5 live passed（需 Key）
 git grep -c "assert" -- src/test   # 断言密度检查
 ```

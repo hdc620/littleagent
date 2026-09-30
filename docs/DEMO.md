@@ -1,7 +1,7 @@
 # 真实 DeepSeek API 运行记录
 
 - 模型：`deepseek-chat`（OpenAI 兼容 `/v1/chat/completions`）
-- 命令：`java -jar target/mini-agent.jar --demo --max-context-tokens 2500`
+- 命令：`java -jar target/little-agent.jar --demo --max-context-tokens 2500`
 - 说明：以下为程序原始输出（未美化）。`--demo` 覆盖题目里的 6 个场景；天气/检索为 mock 数据源，已在回答中声明。
 
 > **这是历史记录**：为保持"原始输出不美化"的原则，下面的文本没有回改。
@@ -10,7 +10,7 @@
 > 另外现在 `--demo` 在未显式指定预算时会自动收到 2000，命令里的 `--max-context-tokens 2500` 只是为了复现当时那次运行。
 
 ```text
-################ mini-agent 演示脚本 ################
+################ little-agent 演示脚本 ################
 模型: deepseek-chat
 用户: A
 

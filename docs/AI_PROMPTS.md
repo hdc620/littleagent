@@ -10,10 +10,10 @@
 
 ### P1. Agent 系统提示词
 
-`com.miniagent.core.AgentConfig#DEFAULT_SYSTEM_PROMPT`（节选）：
+`com.littleagent.core.AgentConfig#DEFAULT_SYSTEM_PROMPT`（节选）：
 
 ```
-你是 mini-agent，一个以工具为中心的 AI 助手。运行循环由 Runtime 控制，你只负责决策与作答。
+你是 little-agent，一个以工具为中心的 AI 助手。运行循环由 Runtime 控制，你只负责决策与作答。
 
 【工作方式】
 1. 先判断能否直接回答。能直接回答就直接答，不要为了显得勤快而调用工具。
@@ -43,7 +43,7 @@
 
 ### P2. 历史压缩提示词
 
-`com.miniagent.context.LlmSummarizer#SUMMARY_SYSTEM_PROMPT`：
+`com.littleagent.context.LlmSummarizer#SUMMARY_SYSTEM_PROMPT`：
 
 ```
 你是一个对话历史压缩器，为 Agent 的长期记忆服务。
@@ -391,7 +391,7 @@ sessionId.replaceAll("[^a-zA-Z0-9._-]", "_").replace("..", "_")
 「知识库为空（docs/knowledge 下没有文档）」——**恰好就是 README 说"已修复"的那个失败模式**。
 根因：`for (depth = 0; depth < 4; depth++)` 里的 4 是**含 CWD 在内**的目录数，实际只能上溯 3 层。
 
-**修复**：新增 `com.miniagent.util.ProjectPaths`，改为**锚点式**查找 —— 一路向上直到看见
+**修复**：新增 `com.littleagent.util.ProjectPaths`，改为**锚点式**查找 —— 一路向上直到看见
 `pom.xml` / `.git` / `build.gradle` 这类「这里是项目根」的标志为止（安全上界 12 层），
 `.env` 与知识库目录共用同一套逻辑。锚点是自解释的，不依赖某个人数出来的层数。
 
