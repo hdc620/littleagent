@@ -10,6 +10,7 @@ import com.miniagent.trace.TraceEvent;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
@@ -33,23 +34,58 @@ public final class Repl {
     private int windowCounter = 0;
 
     public Repl(AgentRuntime runtime, String userId, String initialSessionId, PrintStream out) {
+        this(runtime, userId, initialSessionId, out, openStdin());
+    }
+
+    /** 可注入 Reader 的构造器：便于测试与脚本化驱动（输入编码由调用方决定）。 */
+    public Repl(AgentRuntime runtime, String userId, String initialSessionId, PrintStream out, Reader in) {
         this.runtime = runtime;
         this.userId = userId;
         this.out = out;
-        this.reader = new BufferedReader(openStdin());
+        this.reader = in instanceof BufferedReader buffered ? buffered : new BufferedReader(in);
         this.currentSessionId = initialSessionId;
     }
 
-    private static java.io.Reader openStdin() {
+    /**
+     * 选择标准输入。
+     *
+     * <p>注意：JDK 22 起 {@code System.console()} 在 stdin 被重定向（管道 / 文件）时也会返回非 null，
+     * 必须区分「真终端」与「重定向」：真终端用 console（编码跟随终端，中文控制台才不乱码），
+     * 管道则显式用 UTF-8（否则中文 Windows 上管道喂入的 UTF-8 会被按 GBK 解码成乱码）。
+     *
+     * <p>区分手段是 {@code Console.isTerminal()}，但该方法是 JDK 22 新增的，
+     * 而本项目的编译目标是 Java 17，因此用反射做能力探测：
+     * <ul>
+     *   <li>JDK 22+：调用 {@code isTerminal()} 拿准确答案；</li>
+     *   <li>JDK 17–21：没有该方法，但那时 {@code console() != null} 本身就等价于「有真终端」，
+     *       重定向时 {@code console()} 返回 null，不会走到这里。</li>
+     * </ul>
+     */
+    private static Reader openStdin() {
         try {
             java.io.Console console = System.console();
-            if (console != null) {
+            if (console != null && isTerminal(console)) {
                 return console.reader();
             }
         } catch (RuntimeException e) {
-            // 无终端（管道输入）时退回标准输入
+            // 某些环境不支持 console，退回标准输入
         }
         return new InputStreamReader(System.in, StandardCharsets.UTF_8);
+    }
+
+    private static boolean isTerminal(java.io.Console console) {
+        try {
+            Object result = java.io.Console.class.getMethod("isTerminal").invoke(console);
+            return !(result instanceof Boolean b) || b;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            // JDK 17–21：无此方法。此时 console() 非 null 即代表真终端。
+            return true;
+        }
+    }
+
+    /** 去掉管道输入可能带上的 UTF-8 BOM，否则首条命令会带上不可见字符。 */
+    private static String stripBom(String line) {
+        return line != null && !line.isEmpty() && line.charAt(0) == '\uFEFF' ? line.substring(1) : line;
     }
 
     public void start() {
@@ -74,17 +110,26 @@ public final class Repl {
                 out.println("\n再见。");
                 return;
             }
-            String input = line.strip();
+            String input = stripBom(line).strip();
             if (input.isEmpty()) {
                 continue;
             }
             if (input.startsWith("/")) {
-                if (!handleCommand(input)) {
-                    return;
+                try {
+                    if (!handleCommand(input)) {
+                        return;
+                    }
+                } catch (RuntimeException e) {
+                    // 单条命令出错不能终止整个会话（曾出现过 /new 撞 id 直接把 REPL 打断）
+                    out.println("命令执行失败：" + e.getMessage());
                 }
                 continue;
             }
-            ask(input);
+            try {
+                ask(input);
+            } catch (RuntimeException e) {
+                out.println("本轮处理出现异常：" + e.getMessage());
+            }
         }
     }
 
@@ -122,7 +167,10 @@ public final class Repl {
                       /verbose         切换步骤详情显示
                       /exit            退出
                     直接输入内容即与当前窗口对话。""");
-            case "/new" -> out.println("已新建并切换到窗口 " + newWindow(arg.isEmpty() ? null : arg));
+            case "/new" -> {
+                currentSessionId = newWindow(arg.isEmpty() ? null : arg);
+                out.println("已新建并切换到窗口 " + currentSessionId);
+            }
             case "/use" -> switchWindow(arg);
             case "/sessions" -> listSessions();
             case "/history" -> printHistory(parseInt(arg, 10));
@@ -258,13 +306,22 @@ public final class Repl {
         return runtime.sessions().require(userId, currentSessionId);
     }
 
+    /**
+     * 新建窗口并返回其 id。
+     *
+     * <p>id 由计数器生成，但必须跳过已被占用的 id：Repl 可能以 {@code --session w1} 启动
+     * （此时 w1 由 getOrCreate 建好，但计数器还是 0），若直接自增就会撞上 w1 并抛异常。
+     */
     private String newWindow(String title) {
-        windowCounter++;
-        if (title == null) {
+        String id;
+        do {
+            windowCounter++;
+            id = "w" + windowCounter;
+        } while (runtime.sessions().find(id).isPresent());
+        if (title == null || title.isBlank()) {
             title = "窗口 " + windowCounter;
         }
-        Session session = runtime.sessions().create(userId, "w" + windowCounter, title);
-        return session.id();
+        return runtime.sessions().create(userId, id, title).id();
     }
 
     private static String indent(String text) {

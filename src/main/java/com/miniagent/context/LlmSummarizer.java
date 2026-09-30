@@ -52,7 +52,7 @@ public final class LlmSummarizer implements Summarizer {
     }
 
     @Override
-    public String summarize(String previousSummary, List<Message> messagesToCompress) {
+    public String summarize(String previousSummary, List<Message> messagesToCompress, Tracer tracer) {
         if (messagesToCompress == null || messagesToCompress.isEmpty()) {
             return previousSummary == null ? "" : previousSummary;
         }
@@ -73,14 +73,17 @@ public final class LlmSummarizer implements Summarizer {
                     .addMessage(Message.user(user.toString()))
                     .build();
 
-            LlmResponse response = llm.chat(request, Tracer.noop());
+            // 用会话级 tracer（不是 noop）：压缩调用必须和主循环调用一样在 trace 里可见，
+            // 否则「一次问答实际打了几次 API、花了多少 token、慢在哪」全都对不上账
+            // （实测曾经有 32% 的 API 调用在 trace 里查不到）。
+            LlmResponse response = llm.chat(request, tracer == null ? Tracer.noop() : tracer);
             String text = response.content();
             if (Texts.isBlank(text)) {
-                return fallback.summarize(previousSummary, messagesToCompress);
+                return fallback.summarize(previousSummary, messagesToCompress, tracer);
             }
             return text.strip();
         } catch (RuntimeException e) {
-            return fallback.summarize(previousSummary, messagesToCompress);
+            return fallback.summarize(previousSummary, messagesToCompress, tracer);
         }
     }
 

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -135,6 +136,22 @@ class ToolInvokerTest {
     void neverThrows() {
         assertTrue(invoker.invoke(ToolCall.of("failing", "{}"), context).errorCode() != null);
         assertTrue(invoker.invoke(ToolCall.of("unknown", "{}"), context).errorCode() != null);
+    }
+
+    @Test
+    @DisplayName("close() 之后再调用：折叠成结构化错误而不是抛 RejectedExecutionException")
+    void invokeAfterCloseReturnsErrorResult() {
+        ToolInvoker closed = new ToolInvoker(registry, 1000, 2000);
+        closed.close();
+
+        ToolResult result = closed.invoke(ToolCall.of("echo", "{}"), context);
+
+        // API.md 里 invoke 的契约是「永不抛异常」——executor 已关闭属于工具层故障，
+        // 必须折叠成可回灌的结果（早期实现会抛 RejectedExecutionException 穿透到调用方）
+        assertAll(
+                () -> assertFalse(result.ok()),
+                () -> assertEquals("TOOL_EXECUTOR_CLOSED", result.errorCode()),
+                () -> assertTrue(result.toObservation().startsWith("[TOOL_ERROR]")));
     }
 
     // ------------------------------------------------------------- 测试工具

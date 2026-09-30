@@ -38,18 +38,21 @@ public final class DemoScenarios {
         out.println("################ mini-agent 演示脚本 ################");
         out.println("模型: " + (runtime.config().mockMode() ? "MockLlmClient（离线演示）" : runtime.config().model()));
         out.println("用户: " + userId);
+        out.println("上下文预算: " + runtime.config().maxContextTokens() + " tokens"
+                + "（demo 默认收紧到 2000，以便第 6 个场景真的演示出自动压缩；用 --max-context-tokens 可覆盖）");
         out.println();
 
         section("场景 1：用户 A 的窗口 1 —— 查天气 + 记待办",
-                "展示：一轮内并发调用两个工具（weather + todo），工具结果回灌后模型再作答");
+                "展示：一轮内一次请求发起两个工具调用（weather + todo，当前按顺序串行执行），工具结果回灌后模型再作答");
         turn("w1", "帮我查一下北京今天的天气，然后记个待办：给张总发周报");
 
         section("场景 2：用户 A 的窗口 2 —— 写周报 + 记待办",
                 "展示：search 检索知识库模板（或 read_docs 读原文），再记一条属于窗口 2 的待办");
         turn("w2", "我要写本周周报，先查一下知识库里的周报模板，然后记个待办：周五前提交周报");
 
-        section("场景 3：回到窗口 1 —— 纯对话追问（不调用工具）",
-                "展示：跨轮次记忆 —— 待办存在 session 工作记忆里，历史被压缩后依然能答出来");
+        section("场景 3：回到窗口 1 —— 纯对话追问",
+                "展示：跨轮次记忆 —— 待办存在 session 工作记忆里，历史被压缩后依然能答出来"
+                        + "（真实模型通常不调工具直接回答；离线 mock 是关键词规则，会先 list 一下）");
         turn("w1", "我刚才让你记的待办是什么？");
 
         section("场景 4：窗口 1 —— 带工具的追问",

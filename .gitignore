@@ -19,6 +19,13 @@ logs/
 traces/
 *.jsonl
 
+# ---- 本地审计/验证产物（不属于交付内容）----
+# 受限沙箱里用的 Maven settings（把本地仓库指到项目内 .m2repo/），正常开发用不到
+.mvn-settings.xml
+# 代码审计时产生的复现脚本与运行证据
+audit-*.log
+audit-*.jsh
+
 # ---- IDE ----
 # 保留共享的 Run Configuration，其余 .idea 内容忽略
 .idea/*

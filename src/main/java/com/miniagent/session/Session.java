@@ -108,6 +108,10 @@ public final class Session {
      *
      * <p>启发式估算难免偏差，而 API 返回的 prompt_tokens 是精确值：压缩阈值判断优先信它，
      * 估算值只作为「还没有真实数据时」的兜底。
+     *
+     * <p><b>注意它必须随上下文缩短而失效</b>：这是一个「只增不减」的字段，如果压缩之后不清掉，
+     * 一次大 prompt 会让 signal 永远停在峰值，于是**每一轮都白付一次摘要调用**
+     * （见 {@link #clearPromptTokensSignal()}）。
      */
     public int lastPromptTokens() {
         return lastPromptTokens;
@@ -117,6 +121,17 @@ public final class Session {
         if (tokens > 0) {
             this.lastPromptTokens = tokens;
         }
+    }
+
+    /**
+     * 让上一次的真实 prompt_tokens 失效（压缩成功后调用）。
+     *
+     * <p>压缩改变了上下文形状，之前那次测量不再代表当前上下文；不清零的话
+     * {@code max(估算, lastPromptTokens)} 会被过期的峰值长期顶住，导致每轮都触发压缩。
+     * 清零后由下一次 LLM 调用重新写入精确值，属于自校正。
+     */
+    public void clearPromptTokensSignal() {
+        this.lastPromptTokens = 0;
     }
 
     /** 追加消息并打上会话流水号；user 消息会推进轮次计数。 */
@@ -179,11 +194,25 @@ public final class Session {
     }
 
     public int estimatedTokens() {
+        return estimatedTokensFrom(0);
+    }
+
+    /**
+     * 估算 token，但**只统计 {@code [fromIndex, history.size())} 这部分历史**。
+     *
+     * <p>为什么需要它：压缩只是「把 {@code history[0, summarizedUpTo)} 的内容折进 summary」，
+     * 原始消息仍留在 history 里（保留可召回性）。如果估算把整条 history 都算上，
+     * 那些已经被摘要覆盖、**永远不会再进请求**的消息就会被重复计数 ——
+     * 后果是估算系统性偏高、压缩后估算反而变大，而且只要原始历史超过预算就每轮都触发压缩。
+     * 所以压缩阈值的估算必须从 {@code summarizedUpTo} 开始算。
+     */
+    public int estimatedTokensFrom(int fromIndex) {
         lock.lock();
         try {
             int total = TokenEstimator.estimate(summary) + memory.estimatedTokens();
-            for (Message m : history) {
-                total += m.estimatedTokens();
+            int from = Math.max(0, Math.min(fromIndex, history.size()));
+            for (int i = from; i < history.size(); i++) {
+                total += history.get(i).estimatedTokens();
             }
             return total;
         } finally {

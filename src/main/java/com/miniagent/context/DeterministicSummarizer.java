@@ -2,6 +2,7 @@ package com.miniagent.context;
 
 import com.miniagent.llm.Message;
 import com.miniagent.llm.Role;
+import com.miniagent.trace.Tracer;
 import com.miniagent.util.Texts;
 
 import java.util.ArrayList;
@@ -15,13 +16,15 @@ import java.util.List;
  *   <li>LLM 摘要失败时的兜底（网络抖动、超预算都不该让 Agent 停摆）；</li>
  *   <li>离线 mock 模式下的压缩路径（不消耗 API）。</li>
  * </ol>
+ *
+ * <p>因为不调 LLM，它**不需要 tracer**（参数被有意忽略）。
  */
 public final class DeterministicSummarizer implements Summarizer {
 
     private static final int MAX_CHARS = 1200;
 
     @Override
-    public String summarize(String previousSummary, List<Message> messagesToCompress) {
+    public String summarize(String previousSummary, List<Message> messagesToCompress, Tracer tracer) {
         List<String> userAsks = new ArrayList<>();
         List<String> toolOutcomes = new ArrayList<>();
         List<String> answers = new ArrayList<>();

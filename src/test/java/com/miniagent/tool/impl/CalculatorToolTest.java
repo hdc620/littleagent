@@ -59,6 +59,36 @@ class CalculatorToolTest {
         );
     }
 
+    @Test
+    @DisplayName("极小值不能被打印成 0，近整数不能被四舍五入成整数")
+    void formatsSmallAndNearIntegerValuesExactly() {
+        // 回归：早期实现用绝对阈值 |v - rint(v)| < 1e-9 判「是不是整数」，
+        // 于是 1/1e10 被打印成 0（把非零结果变成 0），3-1e-10 被打印成 3（把非整数变成整数）。
+        assertAll(
+                () -> assertEquals("0.0000000001", ExpressionEvaluator.format(ExpressionEvaluator.evaluate("1/10000000000"))),
+                () -> assertEquals("2.9999999999", ExpressionEvaluator.format(ExpressionEvaluator.evaluate("3-0.0000000001"))),
+                () -> assertEquals("0.000001", ExpressionEvaluator.format(ExpressionEvaluator.evaluate("1/1000000"))),
+                // 真正的整数仍然不带小数点
+                () -> assertEquals("0", ExpressionEvaluator.format(ExpressionEvaluator.evaluate("0*5"))),
+                () -> assertEquals("10000000000", ExpressionEvaluator.format(ExpressionEvaluator.evaluate("10^10"))),
+                // NaN / Infinity 不能抛异常
+                () -> assertEquals("NaN", ExpressionEvaluator.format(Double.NaN)),
+                () -> assertEquals("Infinity", ExpressionEvaluator.format(Double.POSITIVE_INFINITY))
+        );
+    }
+
+    @Test
+    @DisplayName("工具返回的小数值是完整小数，不是 0")
+    void toolReportsSmallValueNotZero() {
+        CalculatorTool tool = new CalculatorTool();
+        var result = tool.execute(args("expression", "1/10000000000"), null);
+
+        assertAll(
+                () -> assertTrue(result.ok()),
+                () -> assertEquals("1/10000000000 = 0.0000000001", result.content())
+        );
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"1/0", "5%0", "sqrt(-1)", "(1+2", "1+", "abc(3)", "1 $ 2"})
     @DisplayName("非法表达式抛 IllegalArgumentException（不执行任意代码）")

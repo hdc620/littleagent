@@ -40,6 +40,12 @@ public final class Main {
         }
         if (options.maxContextTokens > 0) {
             builder.maxContextTokens(options.maxContextTokens);
+        } else if (options.demo) {
+            // 演示脚本场景 6 的标题是「超过 maxContextTokens 后自动把旧历史压成摘要」，
+            // 但默认预算 6000 在 10 轮对话后只用到约 2800 token —— 评审按 README 推荐的
+            // `--demo` 跑会看到「已压缩前 0 条」，这条场景自己证明不了自己。
+            // 所以 demo 模式在用户没显式指定预算时收紧到 2000，让它真的演示出压缩。
+            builder.maxContextTokens(2000);
         }
         if (options.logDir != null) {
             builder.logDir("none".equalsIgnoreCase(options.logDir) ? null : Path.of(options.logDir));

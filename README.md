@@ -4,7 +4,7 @@
 > LLM 输出解析、多 session 隔离、上下文旅程压缩与记忆召回、异常处理与全链路 trace。
 > 使用**真实 LLM API**（DeepSeek / 任意 OpenAI 兼容网关）。
 
-[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-163%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
+[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-188%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
 
 ---
 
@@ -41,7 +41,7 @@
 | session 管理 | `Session` / `SessionManager`：一窗口一 session，历史+工作记忆+trace 全隔离，可随时接着聊 |
 | context 管理 | `ContextManager`：三段式组装、按完整轮次切窗口、超预算增量压缩、真实 token 用量触发 |
 | memory | 工作记忆（结构化，每轮注入）+ 摘要（长期）+ 关键词召回（情节记忆） |
-| 异常处理 | `AgentException` 体系 + 工具调用 8 项防护 + LLM 重试退避 + 循环边界，**永不把异常抛给调用方** |
+| 异常处理 | `AgentException` 体系 + 工具调用 9 项防护 + LLM 重试退避 + 循环边界，**永不把异常抛给调用方** |
 | trace/日志 | `Tracer`：15 类事件、JSONL 落盘、CLI 可回放时间线 |
 
 真实运行证据（DeepSeek `deepseek-chat`，2026-09-28 实测）见 [第 10 节](#10-真实-api-运行记录) 与 [`docs/DEMO.md`](docs/DEMO.md)。
@@ -68,7 +68,7 @@ cp .env.example .env.local      # Windows: copy .env.example .env.local
 ### 2.3 编译与测试
 
 ```bash
-mvn clean package                 # 编译 + 跑 163 个单元测试 + 打可执行 jar → target/mini-agent.jar
+mvn clean package                 # 编译 + 跑 188 个单元测试 + 打可执行 jar → target/mini-agent.jar
 mvn verify                        # 额外跑 5 个真实 API 集成测试（无 Key 时自动跳过）
 mvn "-Dtest=AgentLoopTest" test    # 只跑某个测试类
 ```
@@ -85,6 +85,8 @@ A@w2> /use 1                 # 切回窗口 1
 A@w1> 我刚才让你记的待办是什么？
 
 # ② 一键跑完题目里的 6 个场景（推荐给评审）
+#    `--demo` 会自动把上下文预算收到 2000（旧默认 6000 时场景 6「超预算自动压缩」压根不触发）；
+#    想用别的预算就显式加 --max-context-tokens <n>
 java -jar target/mini-agent.jar --demo
 
 # ③ 没有 API Key：离线假模型跑通全链路（不产生任何网络请求）
@@ -122,14 +124,14 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 
    > 若下拉框提示 `Module not specified`，手动选一下 `mini-agent` 模块即可（IDEA 按 artifactId 生成模块名）。
 
-5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（163 个单元测试，离线，几秒）。
+5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（188 个单元测试，离线，几秒）。
    `DeepSeekLiveIT` 也可以直接右键运行——IDEA 不区分 failsafe，`@Test` 就会执行；没有 Key 时它会自动 skip。
 
 6. **三个常见坑**（前两个已修复，列出来便于排查）：
 
    | 现象 | 原因 | 处理 |
    | --- | --- | --- |
-   | 启动即报「未检测到 DEEPSEEK_API_KEY」 | Working directory 不在项目内，`.env.local` 找不到 | Run Configuration 的 `Working directory` 设为 `$PROJECT_DIR$`（内置配置已设好）；`.env.local` 与 `docs/knowledge` 都会从 CWD 向上查找最多 4 层 |
+   | 启动即报「未检测到 DEEPSEEK_API_KEY」 | Working directory 不在项目内，`.env.local` 找不到 | Run Configuration 的 `Working directory` 设为 `$PROJECT_DIR$`（内置配置已设好）；`.env.local` 与 `docs/knowledge` 都会从 CWD 向上查找，直到看见项目根锚点（`pom.xml`/`.git`）为止（安全上界 12 层，不再写死「向上 4 层」） |
    | `search` 一直返回「知识库为空」 | 同上，工作目录不在项目内 | 同上；只要 CWD 在项目目录树内即可自动定位，已由 `DefaultToolsTest` 覆盖 |
    | 控制台中文乱码（少数老版本） | 控制台编码非 UTF-8 | `Help → Edit Custom VM Options` 加 `-Dfile.encoding=UTF-8`，或 `Settings → Editor → File Encodings` 全部设为 UTF-8 |
 
@@ -144,10 +146,10 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 | --- | --- | --- |
 | 从零实现，不依赖 Agent 框架 | 全部自研；依赖仅 `jackson-databind` + JUnit | `pom.xml` 依赖清单 |
 | step1 接收用户输入 | `AgentRuntime#run` | `AgentLoopTest#directAnswerWithoutTools` |
-| step2 判断直接回复还是调用工具 | `ContextManager#build` → `LlmClient#chat` → `LlmOutputParser#parse` | `LlmOutputParserTest`（11 例） |
-| step3 调用工具 | `ToolInvoker#invoke` | `ToolInvokerTest`（10 例） |
+| step2 判断直接回复还是调用工具 | `ContextManager#build` → `LlmClient#chat` → `LlmOutputParser#parse` | `LlmOutputParserTest`（16 例） |
+| step3 调用工具 | `ToolInvoker#invoke` | `ToolInvokerTest`（11 例） |
 | step4 判断继续 loop 还是返回 | `AgentRuntime` 循环尾部 | `AgentLoopTest#executesToolAndFeedsResultBack` |
-| ≥3 个工具（计算器/搜索/天气/待办…） | 5 个：`calculator` `search` `read_docs` `todo` `weather` | `BuiltinToolsTest`（13 例）+ `CalculatorToolTest`（29 例） |
+| ≥3 个工具（计算器/搜索/天气/待办…） | 5 个：`calculator` `search` `read_docs` `todo` `weather` | `BuiltinToolsTest`（13 例）+ `CalculatorToolTest`（31 例） |
 | 工具注册机制（名称/描述/参数 Schema） | `Tool` + `ToolRegistry` + `SchemaValidator` | `ToolRegistryTest`、`SchemaValidatorTest` |
 | LLM 基于 Schema 自主决策 | `ToolRegistry#specs` 注入 OpenAI `tools` 字段 | 真实 API 实测：模型自主选择 weather+todo（见第 10 节） |
 | 解析思考过程 / 工具调用 / 最终答案 | `LlmOutputParser` + `ParsedOutput.Mode` | `LlmOutputParserTest` |
@@ -158,10 +160,10 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 | 支持带工具的追问 | 上下文 + 工具组合 | `AssignmentScenarioTest#followUpWithToolUsesContext` |
 | 判断哪些信息塞入 context | `ContextManager` 三段式 + 历史瘦身策略 | `ContextManagerTest#trimsHistoricalAssistantContent` |
 | 过长要压缩 | `ContextManager#compactIfNeeded` + `LlmSummarizer`（带确定性降级） | `ContextManagerTest#compactsWhenOverBudget` |
-| 异常处理 | 异常体系 + 8 项工具防护 + LLM 重试 | `ToolInvokerTest`、`AgentLoopTest#llmFailureBecomesResult` |
+| 异常处理 | 异常体系 + 9 项工具防护 + LLM 重试 | `ToolInvokerTest`、`AgentLoopTest#llmFailureBecomesResult` |
 | 工具 trace / 执行日志 | `Tracer` + `JsonlTraceSink` | `TraceTest`（8 例） |
 | 真实 LLM API | `OpenAiCompatibleClient` → DeepSeek | `DeepSeekLiveIT`（5 例）+ 第 10 节实测记录 |
-| 测试用例 | 163 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
+| 测试用例 | 188 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
 
 ---
 
@@ -229,7 +231,7 @@ AgentResult{ answer, status, steps[], totalUsage, latencyMs, errorCode }
 | 工具失败不抛异常，而是结构化错误结果 | 一次工具失败不该中断对话；错误信息是给模型看的「可执行提示」 |
 | `reasoning`（思维链）持久化但**绝不回灌 API** | DeepSeek 官方要求 + 思维链只对本轮有价值，回灌既烧钱又干扰推理 |
 | 上下文按**完整轮次**切窗口 | `assistant(tool_calls)` 与 `tool` 消息必须成对，从中间切断会导致 API 400 |
-| 压缩阈值用 `max(本地估算, API 真实 prompt_tokens)` | 本地估算会漏算工具 Schema 开销（实测低估近 1 倍），只看估算会「悄悄超预算」 |
+| 压缩阈值用 `max(本地估算, API 真实 prompt_tokens)` | 本地估算会漏算工具 Schema 开销（实测本地估算 1082 tokens、API 真实 `prompt_tokens` 2261，约 2 倍），只看估算会「悄悄超预算」 |
 | 摘要增量合并而非每轮重写 | 避免早期关键信息在多轮压缩中被逐步稀释 |
 | 压缩失败降级为确定性摘要 | 压缩动作永不阻塞对话 |
 | 同一 session 串行、不同 session 并行 | 保证历史与工具配对一致，同时多窗口互不阻塞 |
@@ -273,7 +275,7 @@ Tool 实现 ──register──▶ ToolRegistry ──specs()──▶ LlmReque
 | `todo` | 真实（有状态） | `add/list/done/clear`，状态存 session 工作记忆 ⇒ 天然按窗口隔离 |
 | `weather` | mock | 12 个城市，种子 = `city+date` hash ⇒ 同城同日结果可复现；返回以 `[mock 数据]` 开头，描述里明确写不访问真实气象接口 |
 
-### 5.4 工具调用防护（8 项）
+### 5.4 工具调用防护（9 项）
 
 未知工具 → 坏 JSON → 非对象参数 → Schema 校验（缺必填/类型/枚举/范围）→ 类型纠偏（`"3"` → `3`）→
 超时（默认 5s，线程中断）→ 异常折叠（不含堆栈）→ 结果截断（默认 2000 字）。
@@ -335,7 +337,8 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 
 - **触发**：`max(本地估算 + 固定开销, 最近一次真实 prompt_tokens) > maxContextTokens`（默认 6000）。
   - 固定开销 = system prompt + 全部工具 Schema 的估算。**这是实测踩过的坑**：工具 Schema 常占 1000+ token，
-    只看历史长度会低估近 1 倍，导致上下文早已超预算却不触发压缩（见 [`docs/AI_PROMPTS.md`](docs/AI_PROMPTS.md) 问题 3）。
+    只看历史长度会显著低估（实测本地估算 1082 tokens、API 真实 `prompt_tokens` 2261，约 2 倍），
+    导致上下文早已超预算却不触发压缩（见 [`docs/AI_PROMPTS.md`](docs/AI_PROMPTS.md) 问题 3）。
 - **范围**：`[summarizedUpTo, 最近 keepRecentTurns 轮的起点)`，按 user 消息切分，绝不切散工具配对。
 - **方式**：`LlmSummarizer` 用独立提示词做「增量合并摘要」，明确要求保留目标/事实（城市、数字、待办、文档号）与未决问题。
 - **降级**：LLM 摘要失败或返回空 ⇒ `DeterministicSummarizer`（抽取用户诉求 + 工具结论），压缩永不阻塞对话。
@@ -372,7 +375,10 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 `context_compress_failed`、`llm_request`、`llm_response`、`tool_call`、`tool_result`、`tool_blocked`、
 `loop_step`、`final_answer`、`max_steps_reached`、`error`。
 
-- 落盘：`logs/<sessionId>.jsonl`（一行一事件，含耗时、token、错误码；`jq` 可直接查）。
+- 落盘：`logs/<sessionId>.jsonl`（一行一事件，含 token、错误码等 data 字段；`jq` 可直接查）。
+- 耗时的口径：真正被测量的延迟写在事件的 `data.latencyMs` 里（`llm_response`、`tool_result`、`context_compressed` 这三类；
+  `final_answer` 上的是整轮累计耗时）。事件顶层的通用 `durationMs` 字段由 `Tracer.timed(...)` 填充，
+  而生产代码目前没有调用 `timed`，所以落盘时该字段恒为 0 —— 看耗时请用 `data.latencyMs`。
 - 内存：保留最近 2000 条，CLI `/trace` 可回放时间线。
 - 失败隔离：sink 抛异常不影响主流程；写盘失败只打 warning。
 
@@ -383,7 +389,7 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 ### 9.1 运行
 
 ```bash
-mvn test        # 163 个单元测试（离线，约 3 秒，不花 API 费用）
+mvn test        # 188 个单元测试（离线，约 3 秒，不花 API 费用）
 mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 ```
 
@@ -391,19 +397,22 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 
 | 测试类 | 用例数 | 覆盖点 |
 | --- | --- | --- |
-| `AgentLoopTest` | 15 | 循环四步、多工具并发、maxSteps 强制收尾、工具错误自愈、未知工具、重复调用拦截、空输出自愈、LLM 失败收敛、空输入、完整 trace |
+| `AgentLoopTest` | 18 | 循环四步、一轮内一次请求发起多个工具调用（当前按顺序串行执行，尚未并行化）、maxSteps 强制收尾、工具错误自愈、未知工具、重复调用拦截、空输出自愈（空响应计数必须**连续**，中间有产出就归零）、工具调度异常不毒化 session（不抛异常 + 补齐 tool 配对 + 后续轮次仍可用）、LLM 失败收敛、空输入、完整 trace |
 | `OpenAiCompatibleClientTest` | 16 | wire format（tools/tool_calls/tool_call_id）、思维链不回灌、响应解析、429 重试、5xx 重试上限、401/400 不重试、坏响应、URL 规整、网络错误 |
-| `LlmOutputParserTest` | 11 | 原生 tool_calls、`<tool_call>`、JSON 代码块、ReAct、整段 JSON、去重、防误判、EMPTY、括号配平扫描 |
-| `ContextManagerTest` | 11 | 组装顺序、窗口按轮切分、不切散工具配对、压缩触发与位点、压缩后记忆仍在、固定开销计入、真实 token 信号、历史截断、召回 |
+| `LlmOutputParserTest` | 16 | 原生 tool_calls、`<tool_call>`、JSON 代码块、ReAct、整段 JSON、去重、防误判、EMPTY、括号配平扫描、中文回答以「分析：/思考：/推理：」开头不被当思维链删掉、文本兜底只接受已注册工具名、原生 tool_calls 不做名字过滤 |
+| `ContextManagerTest` | 13 | 组装顺序、窗口按轮切分、窗口不切散工具配对（且窗口内真的含有 tool 消息）、压缩触发与位点、压缩后估算严格变小、压缩后清除过期的 prompt_tokens 信号、压缩后记忆仍在、固定开销计入、真实 token 信号、历史截断、召回 |
 | `AssignmentScenarioTest` | 8 | 窗口 1 查天气记待办、窗口 2 检索记待办、纯对话追问、带工具追问、session 隔离、多用户越权、压缩后记忆、trace |
-| `ToolInvokerTest` | 10 | 8 项工具防护 + trace 断言 |
+| `ToolInvokerTest` | 11 | 9 项工具防护 + trace 断言 |
 | `BuiltinToolsTest` | 13 | 5 个工具的成功/失败/分页/隔离行为 |
-| `CalculatorToolTest` | 29 | 表达式正确性（含全角）、非法表达式、格式化、Schema |
+| `CalculatorToolTest` | 31 | 表达式正确性（含全角）、非法表达式、格式化、Schema、极小值不打印成 0、近整数不被四舍五入 |
 | `SessionManagerTest` | 9 | 隔离、幂等、越权、并发 8×50、工作记忆生命周期、摘要位点 |
-| `MemoryRecallerTest` | 9 | 召回相关度、时间序、TopK、边界、渲染、摘要三级降级 |
-| `TraceTest` | 8 | 事件序号、耗时、异常、JSONL 落盘（含 Instant 回归）、文件名安全化、sink 失败隔离 |
+| `MemoryRecallerTest` | 11 | 召回相关度、时间序、TopK、边界、渲染、摘要三级降级、压缩调用写进会话 trace |
+| `TraceTest` | 8 | 事件序号递增、内存可回溯/可渲染、noop 不记录、`data()` 忽略 null、JSONL 每行合法 JSON 且 `at` 为 ISO 串、文件名安全化、sink 异常隔离、`timed` 记录成功/失败的 `ok`/`error`（不断言耗时数值） |
 | `SchemaValidatorTest` | 6 | 必填/类型/枚举/范围/非对象/类型纠偏 |
 | `ToolRegistryTest` | 5 | 注册、重名、非法工具、specs 导出、内置清单 |
+| `DefaultToolsTest` | 6 | 默认注册表能命中内置知识库；`docs/knowledge` 的定位：项目根 / 子目录向上查找 / 找不到时降级 / 绝对路径透传 / null 走默认 |
+| `ReplTest` | 5 | `/new` 真的切换窗口、`/use` 切回旧窗口且消息按窗口归属、管道输入带 UTF-8 BOM 仍能解析、`/memory`·`/history`·`/trace`·`/sessions` 不抛异常、输入流结束优雅退出 |
+| `ProjectPathsTest` | 5 | 向上查找以项目根锚点（`pom.xml`/`.git`）为界，距根 4 层以上也能定位；不越过项目根；绝对路径原样返回；无锚点时有向上查找上界 |
 | `UtilTest` | 7 | CJK 分词（含标点排除）、token 估算、截断、单行化、JSON、Env |
 | `DeepSeekLiveIT` | 5 | **真实 API**：工具自主决策、跨轮记忆、知识库检索、会话隔离、用量与 trace |
 
@@ -420,6 +429,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 
 模型：`deepseek-chat` ｜ 命令：`java -jar target/mini-agent.jar --demo --max-context-tokens 2000`
 完整记录：[`docs/DEMO.md`](docs/DEMO.md)（离线 mock 版：[`docs/DEMO-mock.md`](docs/DEMO-mock.md)）
+> 注：`--demo` 现已默认把预算收到 2000，这里显式写出来是为了标注当时实际使用的预算。
 
 实测关键片段（真实模型自主决策，非关键词匹配）：
 
@@ -431,7 +441,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
   ◀ Agent：北京今天（2026-09-28）：阵雨，7~17℃…出门记得带伞，路面湿滑注意安全。
            待办已记好：#1 给张总发周报（未完成 1 项）。（天气为 mock 数据源，非真实气象接口。）
 ```
-> 一轮内并发调用两个工具；模型自己把 `date` 填成 `today`；主动声明数据来源是 mock。
+> 一轮内一次请求发起两个工具调用（当前按顺序串行执行，尚未并行化）；模型自己把 `date` 填成 `today`；主动声明数据来源是 mock。
 
 ```
 ▶ 用户@w2：我要写本周周报，先查一下知识库里的周报模板，然后记个待办：周五前提交周报
@@ -451,7 +461,8 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
   ◀ Agent：你当前有 1 项待办：1. #1 周五前提交周报 [未完成]
 ```
 
-- 单轮耗时约 1.0–2.7s（含 2 次 LLM 调用），token 用量从 API `usage` 精确采集并写入 trace。
+- 单轮耗时约 1.0–2.7s（含 2 次 LLM 调用），token 用量从 API `usage` 精确采集并写入 trace
+  （`AgentResult.totalUsage()` 只统计主循环的调用，压缩那次额外的 LLM 调用另算，见第 13 节）。
 - 离线 mock 版完整覆盖同一批场景，无 Key 也能验证 Runtime 行为。
 
 ---
@@ -471,8 +482,8 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 │   ├── DEMO.md / DEMO-mock.md   真实 API / 离线 运行记录
 │   └── knowledge/*.md           内置知识库（search/read_docs 的数据源）
 ├── src/main/java/com/miniagent/ 源码（见第 4 节分层）
-├── src/test/java/com/miniagent/ 测试（163 单元 + 5 集成）
-└── logs/                        运行期 trace（JSONL，已 gitignore）
+├── src/test/java/com/miniagent/ 测试（188 单元 + 5 集成）
+└── logs/                        运行期 trace（JSONL）；运行期才产生，未提交（`.gitignore` 忽略 `logs/` 与 `*.jsonl`）
 ```
 
 ---
@@ -496,10 +507,20 @@ git push -u origin main
 
 1. **`weather` 是 mock 数据源**（题面允许），未接真实气象 API；`search` 是本地关键词检索而非向量检索 —— 两者都保留了与真实实现一致的接口形状，替换不影响 Runtime。
 2. **token 估算为启发式**（±30%）：压缩触发已优先采用真实 `prompt_tokens`，但首次请求前的判断仍依赖估算。
+   口径说明：这里的 ±30% 指 `TokenEstimator` 对**文本本身**的精度（中文 1 字 ≈ 0.75 token）；
+   §7.3 里「实测估算 1082 vs 真实 2261、约 2 倍」说的是另一件事 —— 早期版本**漏算了 system prompt 与工具 Schema
+   的固定开销**，现在已由 `staticOverheadTokens` 计入，两处不再矛盾。
+   另需注意估算口径：压缩阈值只统计**未压缩**的历史（`history[summarizedUpTo, size)`），
+   否则已折进摘要的消息会被重复计数。
 3. **Session 存储是进程内内存**：进程重启会丢失；接口已按可替换设计（换 Redis/DB 无需改 Runtime）。
 4. **召回是关键词打分**，不做语义理解；同义改写（「魔都」vs「上海」）召回不到，生产应换向量检索。
 5. **并发模型**：同一 session 串行执行，超长任务会阻塞该窗口的后续提问（不同窗口不受影响）。
 6. 未实现：流式输出、多模态、工具并行执行（当前工具是串行调用，尚未并行化）。
+7. **压缩本身也是一次 LLM 调用，但它不计入 `AgentResult.totalUsage()`**：这次调用现在已写进 trace
+   （在 `llm_response` 事件里能看到它的 prompt/completion tokens 与耗时），但 `totalUsage()` 的口径是「主循环」用量。
+   若要把压缩成本也算进单轮成本，需要把压缩调用返回的 usage 另行累加进 `AgentResult`。
+8. **`weather` 的「今天/明天」按 JVM 默认时区解析**（`LocalDate.now()`）：跨机器、跨时区或跨零点运行时结果可能不同，
+   所以「同城同日可复现」只在同一时区同一天内成立。
 
 ---
 

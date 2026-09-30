@@ -29,8 +29,10 @@ import com.miniagent.util.Texts;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -127,7 +129,17 @@ public final class AgentRuntime implements AutoCloseable {
             return AgentResult.failed(sessionId, "无法打开会话：" + e.getMessage(), List.of(), 0L, Usage.ZERO, "SESSION_ERROR");
         }
         // 同一会话内串行：保证 history 顺序一致；不同会话使用不同的锁，互不阻塞。
-        return session.withLock(() -> runLocked(session, userId, userInput));
+        //
+        // 最外层再兜一次异常：run() 的契约是「永不抛给调用方」（只返回 AgentResult）。
+        // 锁、executor 生命周期（例如 close() 之后再被调用）这类边界都会在这里被收敛，
+        // 否则一次 RejectedExecutionException 会直接穿透到 CLI/HTTP 层。
+        try {
+            return session.withLock(() -> runLocked(session, userId, userInput));
+        } catch (RuntimeException e) {
+            session.tracer().failure(TraceTypes.ERROR, "Runtime 出现未预期异常", e);
+            return AgentResult.failed(session.id(), "处理这条消息时出现内部错误：" + e.getMessage(),
+                    List.of(), 0L, Usage.ZERO, "RUNTIME_ERROR");
+        }
     }
 
     private AgentResult runLocked(Session session, String userId, String userInput) {
@@ -143,6 +155,8 @@ public final class AgentRuntime implements AutoCloseable {
         Map<String, Integer> signatureCounts = new HashMap<>();
         Usage totalUsage = Usage.ZERO;
         int emptyResponses = 0;
+        // 本轮可用的工具名快照：用于校验「文本兜底解析出来的工具调用」是否真的存在
+        Set<String> toolNames = new HashSet<>(registry.names());
 
         for (int step = 1; step <= config.maxSteps(); step++) {
             // ---- step 2a: 组装上下文（含压缩与记忆召回）----
@@ -174,7 +188,9 @@ public final class AgentRuntime implements AutoCloseable {
             session.lastPromptTokens(response.usage().promptTokens());
 
             // ---- step 2c: 解析输出（思考 / 工具调用 / 最终答案）----
-            ParsedOutput parsed = LlmOutputParser.parse(response);
+            // 传入已注册工具名：文本兜底解析出来的调用必须命中注册表，否则回落成普通正文
+            // （否则模型回答里的 {"name": "张三"} 这类 JSON 会被当成工具调用执行）。
+            ParsedOutput parsed = LlmOutputParser.parse(response, toolNames);
             tracer.event(TraceTypes.LOOP_STEP, "step " + step + " -> " + parsed.mode(),
                     Tracer.data("step", step, "mode", parsed.mode().name(),
                             "toolCalls", parsed.toolCalls().size(),
@@ -186,9 +202,28 @@ public final class AgentRuntime implements AutoCloseable {
                 session.append(Message.assistantToolCalls(Texts.oneLine(parsed.thought(), 1200),
                         parsed.thought(), parsed.toolCalls()));
                 List<AgentResult.ToolOutcome> outcomes = new ArrayList<>();
-                for (ToolCall call : parsed.toolCalls()) {
-                    outcomes.add(executeTool(call, session, userId, tracer, signatureCounts));
+                // 工具执行段必须异常隔离，且**保证每个 tool_call_id 都有配对的 tool 消息**：
+                // 如果这里抛出去，历史里会留下一条没有 tool 回应的 assistant(tool_calls)，
+                // 之后这个 session 的每次请求都会被 API 以 400 拒绝（永久毒化，且无法自愈）。
+                int answered = 0;
+                try {
+                    for (ToolCall call : parsed.toolCalls()) {
+                        outcomes.add(executeTool(call, session, userId, tracer, signatureCounts));
+                        answered++;
+                    }
+                } catch (RuntimeException e) {
+                    // 兜底路径：ToolInvoker 自己已经把工具故障折叠成结构化结果，
+                    // 所以走到这里说明是「工具执行段之外」的问题（例如追加历史失败）。
+                    // 无论如何都必须补齐 tool 消息，否则历史里会留下孤儿的 assistant(tool_calls)。
+                    tracer.failure(TraceTypes.ERROR, "工具执行段异常，补占位 tool 消息以保住配对不变式", e);
+                    appendUnansweredToolPlaceholders(session, parsed.toolCalls(), answered, e);
+                    steps.add(new AgentResult.StepRecord(step, java.time.Instant.now(), parsed.thought(),
+                            parsed.toolCalls(), outcomes, null, response.usage()));
+                    return AgentResult.failed(session.id(), "工具执行阶段出现内部错误：" + e.getMessage(), steps,
+                            elapsedMs(startedAt), totalUsage, "TOOL_DISPATCH_ERROR");
                 }
+                // 这一步产出了有效结果 -> 空响应计数归零（计数器语义是「连续」，不是「累计」）
+                emptyResponses = 0;
                 steps.add(new AgentResult.StepRecord(step, java.time.Instant.now(), parsed.thought(),
                         parsed.toolCalls(), outcomes, null, response.usage()));
                 continue;
@@ -206,12 +241,15 @@ public final class AgentRuntime implements AutoCloseable {
                 return AgentResult.ok(session, answer, steps, elapsedMs(startedAt), totalUsage);
             }
 
-            // ---- 空响应修复：最多自愈一次 ----
+            // ---- 空响应修复：连续两次才失败（自愈一次）----
+            // 注意 emptyResponses 在「有产出的一步」之后必须归零：早期实现漏了归零，
+            // 于是统计的是整轮**累计**空响应，导致「空 -> 工具成功 -> 空」这种正常序列被判失败，
+            // 而且已经拿到的工具结果被丢弃（与注释/文档写的「连续两次」不符）。
             emptyResponses++;
-            tracer.event(TraceTypes.ERROR, "模型返回空内容（第 " + emptyResponses + " 次）",
+            tracer.event(TraceTypes.ERROR, "模型返回空内容（连续第 " + emptyResponses + " 次）",
                     Tracer.data("step", step, "emptyResponses", emptyResponses));
             if (emptyResponses >= 2) {
-                return AgentResult.failed(session.id(), "模型连续返回空内容，请重试或换一个模型。", steps,
+                return AgentResult.failed(session.id(), "模型连续两次返回空内容，请重试或换一个模型。", steps,
                         elapsedMs(startedAt), totalUsage, "EMPTY_MODEL_OUTPUT");
             }
             session.append(Message.assistant("", parsed.thought()));
@@ -220,6 +258,31 @@ public final class AgentRuntime implements AutoCloseable {
 
         // ---- 达到最大步数：禁用工具，强制收尾 ----
         return forceWrapUp(session, userInput, steps, totalUsage, startedAt, tracer);
+    }
+
+    /**
+     * 为「本步中没能产出的工具结果」补一条占位 tool 消息，保住 OpenAI 的配对不变式。
+     *
+     * <h2>为什么这件事必须做（不变量，不是可选项）</h2>
+     * 协议要求：每条带 {@code tool_calls} 的 assistant 消息，后面必须紧跟**每个** {@code tool_call_id}
+     * 对应的 tool 消息。如果工具执行段抛异常，历史里就会留下一条「有 tool_calls、没有 tool 回应」的
+     * assistant 消息，之后这个 session 的每一次请求都会被 API 以
+     * {@code 400 ... must be followed by tool messages responding to each tool_call_id} 拒绝 ——
+     * 而且代码里没有任何自愈路径，等于**永久毒化**这个窗口。
+     *
+     * <p>所以「窗口切片不切断配对」只是第一层保证（{@code ContextManager.verbatimWindowStart}），
+     * **写入侧也必须保证**：宁可给模型一条「这条调用没执行」的占位结果，也不能留下孤儿。
+     *
+     * @param answered 已经成功回灌结果的调用数量；从它开始都算未执行
+     */
+    static void appendUnansweredToolPlaceholders(Session session, List<ToolCall> calls, int answered,
+                                                 RuntimeException cause) {
+        for (int i = Math.max(0, answered); i < calls.size(); i++) {
+            ToolCall unanswered = calls.get(i);
+            session.append(Message.tool(unanswered.id(), unanswered.name(),
+                    ToolResult.error("TOOL_DISPATCH_ERROR",
+                            "工具调度阶段异常，本条调用未执行（" + cause.getClass().getSimpleName() + "）。").toObservation()));
+        }
     }
 
     /** 执行单个工具调用，带重复调用保护。 */

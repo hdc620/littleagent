@@ -87,7 +87,14 @@ action=clear 清除已完成项。
 ## 第二部分：开发过程的问题解决记录
 
 > 开发方式：以 AI 编码代理完成实现，人工负责定架构、验收与关键决策。
-> 下表是从 0 到 163 个单元测试全绿之间，**真实发生且被修复**的问题。
+> 下表是从 0 到 188 个单元测试全绿之间，**真实发生且被修复**的问题。
+>
+> **问题 1–11** 来自「边写边撞上」：跑真实 API / 跑测试时暴露出来的问题。
+> **问题 13–21** 来自一次**定向的代码审计**：不再依赖「撞上」，而是逐文件读代码 + 用
+> `jshell` 直接调 `target/classes` 复现（例如「空响应计数是累计还是连续」「中文回答会不会被当思维链删掉」），
+> 再补回归测试。这属于「AI 写完的代码，人必须自己过一遍」的部分：
+> 其中至少两条（空响应计数、中文答案被删空）在人工使用中是**偶发且难复现**的，靠自测几乎撞不上。
+> 每个修复都配了回归用例（测试名见各条的「沉淀」）。
 
 ### 问题 1：`Instant` 让 trace 落盘全部失败
 
@@ -155,6 +162,9 @@ OpenAI 兼容接口会直接返回 400。
 
 **沉淀**：`ContextManagerTest#neverSplitsToolCallPairs`（遍历上下文，断言每条 `tool` 消息前面必须是
 `assistant(tool_calls)` 或另一条 `tool`）。
+> 补充（审计时发现）：这条用例早期是**空转**的 —— 当时把工具调用放在第一轮且 `keepRecentTurns=1`，
+> 组装出来的窗口里只有 `[user, assistant]`，**根本没有 TOOL 消息**，配对断言那个循环从未执行。
+> 现在改为把工具调用放在最后一轮，并断言「窗口内确实含 1 条 TOOL」+「`toolCallId` 与 assistant 的 calls 对得上」。
 
 ---
 
@@ -242,14 +252,177 @@ sessionId.replaceAll("[^a-zA-Z0-9._-]", "_").replace("..", "_")
 
 ---
 
-### 问题 12：工程环境相关（Windows + 沙箱）
+### 问题 13：空响应保护统计的是「累计」而不是「连续」（一行之差，丢掉了整轮结果）
+
+**现象**：对代码做逐行审计时发现 `emptyResponses` 声明在 `for` 循环**外面**，而且任何成功的一步之后
+都**没有归零**。用剧本化替身复现：`[空响应, 调 calculator(1+1), 空响应]` →
+`status=FAILED, code=EMPTY_MODEL_OUTPUT, toolCallCount=1` —— 第 2 步的工具**真的执行成功了**，
+整轮却因为第 3 步的空响应被判失败，那个工具结果永远没讲给用户听。
+而类注释、`DESIGN.md`、`API.md` 三处写的都是「**连续**两次」。
+
+**根因**：计数器语义是「连续次数」，实现却写成了「累计次数」。这是典型的**注释与代码不一致**，
+而且因为两条空响应之间恰好夹着成功步骤的概率不低，真实场景下会偶发地把好结果丢掉。
+
+**修复**：任何有产出的一步（执行工具成功 / 拿到最终答案）之后把计数器归零；同时把错误文案从
+「模型连续返回空内容」改成「模型连续两次返回空内容」，并让 trace 里的事件说明写「连续第 N 次」。
+
+**沉淀**：`AgentLoopTest#emptyResponsesMustBeConsecutive`（断言「空→工具成功→空→正常回答」必须 `OK`
+且工具产出不丢），与之配对的 `#failsAfterTwoEmptyResponses` 保证「真连续两次」仍然失败。
+
+---
+
+### 问题 14：中文回答以「分析：」开头会被当成思维链删掉（比误判工具调用更严重）
+
+**现象**：审计时用 `jshell` 直接调解析器复现：输入 `分析：接口超时是因为连接池太小。`（一句完全正常的中文回答）
+得到 `mode=EMPTY, finalAnswer=null, thought=接口超时是因为连接池太小。` —— 回答被**整行删空**，
+于是 Runtime 走「空响应自愈」分支、注入「你上一条回复为空」，连续两次就整轮失败。**用户的问题被彻底吞掉。**
+
+**根因**：`stripThoughtMarkers` 无条件剥离匹配 `^(Thought|思考|推理|分析):` 的整行，而且这个函数在
+**最终答案路径**上也会被调用。抽出思维链（用于 trace）和从答案里删掉思维链是两件事，被合成了一个函数。
+中文模型极爱用「分析：」「结论：」开头，所以这是最容易在真实使用中触发的假阳性。
+
+**修复**：只剥 `<thought>…</thought>` 标签，不再剥裸的中文行。ReAct 的 `Thought:` 行本来就不需要在这里处理——
+只要正文里出现 `Action:`，解析器已经走工具调用分支了。`thought` 字段仍由 `extractThought` 抽取（只用于 trace/UI，不回灌）。
+
+**沉淀**：`LlmOutputParserTest#keepsChineseAnswerStartingWithThoughtLikeMarker`（三种中文标记逐个断言答案原样返回）、
+`#stillStripsThoughtTagFromAnswer`（标签路径不退化）。
+
+---
+
+### 问题 15：工具执行段没有异常隔离 → 一条异常会**永久毒化**整个会话
+
+**现象**：`executor.submit` 在 `ToolInvoker.close()` 之后会抛 `RejectedExecutionException`。
+因为工具执行段外面没有 `try/catch`，这个异常直接穿过 `run()` 抛给调用方（违反 README/API 文档里写的「永不抛异常」）。
+**但真正严重的是它留下的状态**：异常发生时最后一条 `assistant(tool_calls)` 已经写进历史，
+配对的 `tool` 消息还没写 —— 之后这个 session 的**每一次**请求都会被 API 以
+`400 … must be followed by tool messages responding to each tool_call_id` 拒绝，而且代码里没有任何自愈路径。
+
+**修复**（分两层，都在写入侧）：
+1. `ToolInvoker.invoke` 把 `submit` 包进 try，`RejectedExecutionException` 折叠成 `TOOL_EXECUTOR_CLOSED` 结果
+   —— 工具层故障就该是「可回灌的工具结果」，让模型知道并换路；契约因此真的成立；
+2. `AgentRuntime` 的工具执行段加 `try/catch`，异常时用 `appendUnansweredToolPlaceholders` 为**每个**没有回灌结果的
+   `tool_call_id` 补一条占位 `tool` 消息，然后返回 `TOOL_DISPATCH_ERROR`；
+3. `run()` 最外层再兜一层，把锁/executor 这类边界异常收敛成 `RUNTIME_ERROR`。
+
+**关键认知**：「窗口切片不切断配对」只是第一层保证，**写入侧也必须保证不产生孤儿**——
+配对是协议级不变量，不能只在读取路径上维护。
+
+**沉淀**：`AgentLoopTest#toolDispatchFailureDoesNotPoisonSession`（关掉 runtime 后仍不抛异常、工具故障收敛、
+之后同一 session 仍能正常对话）、`#repairsOrphanToolCalls`（直接断言占位消息补齐且 `toolCallId` 对得上）、
+`ToolInvokerTest#invokeAfterCloseReturnsErrorResult`。
+
+---
+
+### 问题 16：压缩信号里混进了「已经压缩掉的历史」→ 压缩后估算反而变大
+
+**现象**：用真实 API 跑 10 轮对话，`context_compressed` 事件显示 6 次压缩里有 **4 次 `after > before`**
+（1615→1694、1927→1962、2438→2549、3005→3035）——「压缩」让上下文估算变大了。
+
+**根因**：压缩**不删除** history 里的原始消息（保留给召回用），只把 `summarizedUpTo` 往前推；
+但 `Session.estimatedTokens()` 累加的是**整条** history，`ContextManager.estimate()` 又在它基础上加固定开销。
+于是已被折进摘要、**永远不会再进请求**的消息被重复计了一遍。后果不只是数字难看：
+只要原始历史超过预算，`keepFrom` 每轮都会前进一格 → **每一轮都多付一次 LLM 摘要调用**
+（实测 10 轮触发 6 次，每次 0.6–1.6 秒）。
+
+**修复**：新增 `Session.estimatedTokensFrom(int)`，压缩阈值改为从 `summarizedUpTo` 开始统计；
+`context_compressed` 事件增加 `shrank` 标记，让「这次压缩有没有真的变小」一眼可见。
+
+**沉淀**：`ContextManagerTest#estimateExcludesCompressedHistory`（断言压缩后估算严格变小 + `shrank=true`）。
+修复后用真实 API 复跑：6 次压缩里 5 次 `shrank=true`。
+
+---
+
+### 问题 17：`lastPromptTokens` 是只增不减的高水位 → 每轮都白压缩一次
+
+**现象**：脚本化复现：设 `lastPromptTokens=9000`、预算 6000、真实估算只有 538 →
+`compactIfNeeded` 在**每一轮**都返回 true（signal 恒为 9000），历史被逐轮折叠进有损摘要，
+而实际上下文只有预算的 1/11。
+
+**根因**：`Session.lastPromptTokens(int)` 只在 `tokens > 0` 时赋值，**从不衰减、从不清零**；
+而压缩路径自己用的是 `Tracer.noop()` 且丢弃 usage，所以它**永远刷不新高水位**。
+
+**修复**：压缩成功后调用 `Session.clearPromptTokensSignal()` 让过期的真实用量失效，
+由下一次 LLM 调用写入新值（自校正）。
+
+**沉淀**：`ContextManagerTest#clearsStalePromptTokensAfterCompaction`（断言压缩后信号归零、
+且上下文远低于预算时不再压缩）。
+
+---
+
+### 问题 18：压缩调用的 LLM 用量在 trace 里完全不可见（32% 的 API 调用查不到）
+
+**现象**：逐条统计真实运行产生的 `logs/<session>.jsonl`：13 次被记录的 LLM 请求，
+但同一次运行里实际发生了 **19 次** API 调用（6 次压缩），**32% 的调用在 trace 里查不到**；
+每次压缩 613–1633ms 落在用户等待里却没有归属。
+
+**根因**：`LlmSummarizer` 固定传 `Tracer.noop()`，既不写 trace 事件，也丢弃了 `response.usage()`。
+「一个 session 一个 tracer、15 类事件全链路可重放」这条承诺因此不成立——
+面试官只要把 trace 里的耗时加起来对不上用户实际等的时间，就能问穿。
+
+**修复**：`Summarizer.summarize(...)` 增加 `Tracer` 参数，`ContextManager.compact` 传入 `session.tracer()`，
+压缩调用与主循环调用在 trace 里同等可见（含 prompt/completion tokens）。
+诚实保留一条口径说明：`AgentResult.totalUsage()` 仍只统计主循环用量。
+
+**沉淀**：`MemoryRecallerTest#summarizerWritesTraceWithSessionTracer` / `#summarizerToleratesNullTracer`；
+修复后真实 API 复跑同一次 demo，`llm_request` 从 13 条变成 20 条。
+
+---
+
+### 问题 19：文本兜底解析不校验工具名 → 普通作答里的 JSON 被执行成工具调用
+
+**现象**：`jshell` 复现：`{"name": "张三", "age": 30}` 被解析成「调用工具 张三」。
+模型只要在答案里贴一段带 `name` 字段的 JSON（接口示例、人名记录……），用户拿到的就不是答案，
+而是一段 `UNKNOWN_TOOL` 失败回灌。而 `API.md` 当时写的是「只有同时含名称字段与参数类字段才认定」——
+文档比实现更强。
+
+**修复**：`LlmOutputParser.parse(response, Set<String> knownTools)`——文本兜底**只接受注册表里存在的工具名**，
+名字不匹配就回落成普通正文。两条有意的边界：**原生 `tool_calls` 不做名字过滤**（那是模型通过 API 正式发起的调用，
+名字错也应该走 `UNKNOWN_TOOL` 回灌去纠正）；`knownTools == null` 表示不校验（单测/离线回放）。
+
+**沉淀**：`LlmOutputParserTest#textFallbackOnlyAcceptsRegisteredToolNames`、
+`#nativeToolCallsAreNotFilteredByName`、`#withoutKnownToolsNoFiltering`。
+
+---
+
+### 问题 20：「向上查找 4 层」差一层，深层 CWD 下知识库静默失效
+
+**现象**：README 声称「`.env.local` 与 `docs/knowledge` 都会从 CWD 向上查找最多 4 层，只要 CWD 在项目树内即可定位」。
+实际把 CWD 设成 `src/main/java/com/miniagent`（距根 4 层）再跑，`search` 返回
+「知识库为空（docs/knowledge 下没有文档）」——**恰好就是 README 说"已修复"的那个失败模式**。
+根因：`for (depth = 0; depth < 4; depth++)` 里的 4 是**含 CWD 在内**的目录数，实际只能上溯 3 层。
+
+**修复**：新增 `com.miniagent.util.ProjectPaths`，改为**锚点式**查找 —— 一路向上直到看见
+`pom.xml` / `.git` / `build.gradle` 这类「这里是项目根」的标志为止（安全上界 12 层），
+`.env` 与知识库目录共用同一套逻辑。锚点是自解释的，不依赖某个人数出来的层数。
+
+**沉淀**：`ProjectPathsTest`（距根 4 层以上仍能定位、越过项目根就不再向上、绝对路径透传、目录顺序从近到远、无锚点时有上界）。
+
+---
+
+### 问题 21：`calculator` 把小数值打印成 0、把近整数四舍五入成整数
+
+**现象**：真实 API 实测 `1/10000000000` 返回 `= 0`（非零结果变成 0），
+`3-0.0000000001` 会打印成 `3`。根因是判「是不是整数」用了绝对阈值 `|v - rint(v)| < 1e-9`，
+与量级无关。有意思的是**模型自己发现了这个问题**并在答案里补了一句
+「按精度取整显示为 0；实际值为 1×10⁻¹⁰」——这既坐实了 bug，也是个「模型会用工具输出自我纠错」的好例子。
+
+**修复**：改为精确比较 `value == Math.rint(value)`，其余交给 `BigDecimal.valueOf(...).toPlainString()`
+十进制展开；并挡住 NaN/Infinity（`BigDecimal.valueOf` 会抛异常）。
+顺带在文档里写清取舍：求值仍是 IEEE 754 double（`0.1+0.2` 就是 `0.30000000000000004`），
+要精确十进制得全程 BigDecimal，但那样无法直接支持 `sin/log/pow` 这类超越函数。
+
+**沉淀**：`CalculatorToolTest#formatsSmallAndNearIntegerValuesExactly`、`#toolReportsSmallValueNotZero`。
+
+---
+
+### 问题 22：工程环境相关（Windows + 沙箱）
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `mvn -Dmaven.test.skip=true` 报 `Unknown lifecycle phase ".test.skip=true"` | PowerShell 把 `-D` 参数在点号处拆开 | 用引号包裹：`mvn "-DskipTests" compile` |
-| Maven 报 `AccessDeniedException: C:\Maven\maven-repository\...` | 本地仓库在工作区之外，被文件沙箱拒绝写入 | 指向工作区内仓库：`-Dmaven.repo.local=.m2repo`（已 gitignore）；沙箱外正常开发无需该参数 |
+| Maven 报 `AccessDeniedException: C:\Maven\maven-repository\...` | 本地仓库在工作区之外，被文件沙箱拒绝写入；且 `-Dmaven.repo.local=...` 会被 settings.xml 里的 `localRepository` 覆盖 | 用项目内 settings 显式指定：`mvn -s .mvn-settings.xml`（`.mvn-settings.xml` 与 `.m2repo/` 都只用于受限环境，不提交） |
 | 控制台中文乱码 | Windows 控制台默认 GBK | `chcp 65001` + `-Dstdout.encoding=UTF-8` |
-| 管道读取中文输入 | `System.in` 使用本地编码 | CLI 优先用 `System.console().reader()`，回退 UTF-8 |
+| 管道读取中文输入 | `System.in` 使用本地编码 | CLI 优先用 `System.console()`（JDK 22+ 还要判 `isTerminal()`，否则重定向时也会非 null），回退 UTF-8 |
 
 ---
 
@@ -268,7 +441,7 @@ sessionId.replaceAll("[^a-zA-Z0-9._-]", "_").replace("..", "_")
 ### 3.2 使用的纪律
 
 1. **禁止臆造 API**：所有涉及库调用的代码必须实际编译通过；文档中的签名必须能在源码里找到。
-2. **每个修复都要有回归测试**：上表 11 个技术问题，全部在 `src/test` 里有对应断言（这是「测试用例」要求的一部分）。
+2. **每个修复都要有回归测试**：上表 20 个技术问题，全部在 `src/test` 里有对应断言（这是「测试用例」要求的一部分）。
 3. **真实 API 验证不可省略**：单元测试用替身证明「Runtime 逻辑正确」，真实 API 测试证明「协议与模型协作正确」——
    两者缺一不可（问题 9 就是只有真实 API 才能暴露的）。
 4. **保留失败证据**：`docs/DEMO.md` 是真实运行的原始输出，不做美化。

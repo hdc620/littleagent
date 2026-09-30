@@ -84,10 +84,10 @@ Tool 实现 ──▶ ToolRegistry ──specs()──▶ LlmRequest.tools ─�
              ToolInvoker.invoke ◀── ToolCall ◀───── LlmResponse.tool_calls
                    │
         ┌──────────┴──────────┐
-   8 项防护              写 trace（tool_call / tool_result）
+   9 项防护              写 trace（tool_call / tool_result）
 ```
 
-**防护链条**（任一环节失败都变成「可读的工具结果」而不是异常）：
+**防护链条**（任一环节失败都变成「可读的工具结果」而不是异常，`invoke` 契约上永不抛异常）：
 
 | # | 防护 | 失败后回灌 |
 | --- | --- | --- |
@@ -96,11 +96,16 @@ Tool 实现 ──▶ ToolRegistry ──specs()──▶ LlmRequest.tools ─�
 | 3 | 参数是对象 | 实际类型 |
 | 4 | Schema 校验 | 逐字段错误（缺哪个必填、类型该是什么） |
 | 5 | 类型纠偏 | 静默修正 `"3"` → `3`，省一轮交互 |
-| 6 | 超时控制 | 超时毫秒数，线程被中断 |
+| 6 | 超时控制 | 超时毫秒数（**只是请求中断**：不响应 interrupt 的工具仍会跑完，所以写工具不能靠超时兜底，要靠幂等键） |
 | 7 | 异常折叠 | 异常类型 + 消息（**不含堆栈**，省 token） |
-| 8 | 结果截断 | 截断长度提示 |
+| 8 | 执行器已关闭 | `TOOL_EXECUTOR_CLOSED`（`close()` 之后调用不再抛 `RejectedExecutionException`） |
+| 9 | 结果截断 | 截断长度提示 |
 
 **为什么错误信息要写得像给人看**：它是给模型看的「修正指令」，含糊的错误（如「参数错误」）会让模型原地打转。
+
+**配对不变式**：模型一次请求多个工具时，`AgentRuntime` 必须为**每一个** `tool_call_id` 回灌一条 `tool` 消息。
+代码里用「已回灌计数 + 异常时补占位消息」来保证；缺少这道保障会让历史留下孤儿 `assistant(tool_calls)`，
+之后该 session 每次请求都被 API 以 400 拒绝（永久毒化，无法自愈）。
 
 ---
 
@@ -149,12 +154,21 @@ dialog : 最近 N 轮原文（按 user 边界切完整轮次）
 | 细节 | 做法 | 原因 |
 | --- | --- | --- |
 | 触发信号 | `max(本地估算 + 固定开销, 真实 prompt_tokens)` | 本地估算漏算工具 Schema（可达 1000+ token），只看它会「悄悄超预算」 |
+| 估算口径 | 只统计 `history[summarizedUpTo, size)` + 摘要 + 工作记忆 + 固定开销 | 压缩不删原始消息（留给召回），用全量历史会把已折进摘要的部分**重复计数**：实测表现为「压缩后估算反而变大」，且原始历史一旦超预算就每轮都触发压缩 |
+| 信号失效 | 压缩成功后 `clearPromptTokensSignal()` | `lastPromptTokens` 是只增不减的高水位；不清掉的话，一次大 prompt 会让信号永远停在峰值（实测 signal 恒 9000 而真实估算只剩 538 → 每轮白付一次摘要调用） |
+| 可观测性 | 压缩那次 LLM 调用写进**会话级** tracer（早期传 `Tracer.noop()`，导致 32% 的 API 调用在 trace 里查不到）；事件带 `shrank` 标记 | 「一次问答打了几次 API、慢在哪、花了多少 token」必须能对账 |
 | 切分边界 | 以 user 消息为界，切完整轮次 | 保住 `assistant(tool_calls)` + `tool` 配对 |
 | 摘要方式 | 增量合并（提示词里带旧摘要） | 避免多轮压缩逐步稀释早期事实 |
 | 摘要内容 | 目标/约束/已确认事实/未决问题/失败尝试 | 这几类是后续追问真正需要的 |
 | 失败降级 | `DeterministicSummarizer`（抽取用户诉求 + 工具结论） | 压缩永不阻塞对话 |
 | 压缩位点 | `summarizedUpTo`，只向前推进 | 幂等、可增量 |
 | 召回池 | `history[0, 最近窗口起点)` | 只召回已滑出窗口的内容，避免与原文重复 |
+
+> **配对不变式的第二道保障**：切片起点落在 user 边界只保证「不会主动切散」配对；
+> 写入侧还必须保证「不会留下孤儿」——工具执行段异常时，`AgentRuntime` 会为每个没有回灌结果的
+> `tool_call_id` 补一条占位 `tool` 消息。否则历史里会留下一条「有 `tool_calls`、没有 `tool` 回应」的
+> assistant 消息，之后该 session 的每次请求都会被 API 以 400 拒绝，且无法自愈。
+> 回归用例：`AgentLoopTest#repairsOrphanToolCalls`、`#toolDispatchFailureDoesNotPoisonSession`。
 
 ### 6.4 召回打分
 

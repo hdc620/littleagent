@@ -75,28 +75,84 @@ class ContextManagerTest {
     void neverSplitsToolCallPairs() {
         Session session = sessions.create("A", "w1", "t");
         appendTurn(session, "第一轮问题", "第一轮回答");
-        session.append(Message.assistantToolCalls("查一下", null,
-                List.of(ToolCall.of("calculator", "{\"expression\":\"1+1\"}"))));
-        session.append(Message.tool("call_1", "calculator", "1+1 = 2"));
+        // 工具调用放在**最后一轮**：这样窗口（最近 1 轮）内部真的含有 TOOL 消息，
+        // 配对断言才有东西可查。早期版本把工具调用放在第一轮 + keepRecentTurns=1，
+        // 窗口里只有 [user, assistant]，下面的 for 循环是空转 —— 测试等于没测。
+        session.append(Message.user("第二轮问题：帮我算 1+1"));
+        ToolCall call = ToolCall.of("calculator", "{\"expression\":\"1+1\"}");
+        session.append(Message.assistantToolCalls("查一下", null, List.of(call)));
+        session.append(Message.tool(call.id(), "calculator", "1+1 = 2"));
         session.append(Message.assistant("结果是 2", null));
-        appendTurn(session, "第二轮问题", "第二轮回答");
 
         ContextPackage context = manager(6000, 1, 0, 0).build(session, SYSTEM_PROMPT, List.of());
-
         List<Message> messages = context.messages();
+
         int firstNonSystem = 0;
         while (messages.get(firstNonSystem).role() == Role.SYSTEM) {
             firstNonSystem++;
         }
         // 窗口起点必须是 user 消息，且后续 tool 消息都能找到配对的 assistant(tool_calls)
         assertEquals(Role.USER, messages.get(firstNonSystem).role());
+        assertEquals("第二轮问题：帮我算 1+1", messages.get(firstNonSystem).content());
+        long toolCount = messages.stream().filter(m -> m.role() == Role.TOOL).count();
+        assertEquals(1, toolCount, "窗口内必须真的含有 tool 消息，否则这个用例是空转");
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i).role() == Role.TOOL) {
                 assertTrue(i > 0 && messages.get(i - 1).role() == Role.ASSISTANT
                                 || messages.get(i - 1).role() == Role.TOOL,
                         "tool 消息前必须是 assistant(tool_calls) 或另一个 tool 消息");
+                // 而且 tool_call_id 必须能对上前面那条 assistant 的 calls
+                String toolCallId = messages.get(i).toolCallId();
+                assertTrue(messages.get(i - 1).toolCalls().stream().anyMatch(c -> c.id().equals(toolCallId)),
+                        "tool 消息的 toolCallId 必须与 assistant(tool_calls) 一致");
             }
         }
+    }
+
+    @Test
+    @DisplayName("估算不重复计算已压缩的历史：压缩后估算必须严格变小")
+    void estimateExcludesCompressedHistory() {
+        Session session = sessions.create("A", "w1", "t");
+        for (int i = 1; i <= 5; i++) {
+            appendTurn(session, "第 " + i + " 轮提问：" + "内容".repeat(60), "第 " + i + " 轮回答：" + "答复".repeat(60));
+        }
+        ContextManager manager = manager(1000, 1, 0, 1000);
+
+        int estimatedBefore = manager.estimate(session);
+        assertTrue(manager.compactIfNeeded(session));
+        int estimatedAfter = manager.estimate(session);
+
+        // 早期实现里 estimate() 累加整条 history（含已被摘要覆盖的部分），
+        // 于是「压缩」会让估算不降反升（实测 6 次里 4 次 after > before）。
+        assertTrue(estimatedAfter < estimatedBefore,
+                "压缩后估算必须变小，实际 " + estimatedBefore + " -> " + estimatedAfter);
+        // 压缩区间是 [0, summarizedUpTo)，这段历史不应该再被计入
+        assertEquals(session.estimatedTokensFrom(session.summarizedUpTo()) + 1000, estimatedAfter);
+        assertTrue(session.estimatedTokens() > session.estimatedTokensFrom(session.summarizedUpTo()),
+                "全量历史估算必然大于「只算未压缩区间」的估算，否则用例失去意义");
+        assertTrue(session.tracer().events().stream()
+                        .anyMatch(e -> e.type().equals(TraceTypes.CONTEXT_COMPRESSED)
+                                && Boolean.TRUE.equals(e.data().get("shrank"))),
+                "context_compressed 事件应标记本次压缩确实让估算变小");
+    }
+
+    @Test
+    @DisplayName("压缩成功后清掉过期的 prompt_tokens 信号，避免每轮都触发压缩")
+    void clearsStalePromptTokensAfterCompaction() {
+        Session session = sessions.create("A", "w1", "t");
+        for (int i = 1; i <= 6; i++) {
+            appendTurn(session, "第 " + i + " 轮提问", "第 " + i + " 轮回答");
+        }
+        ContextManager manager = manager(6000, 2, 0, 0);
+        // 模拟「上一次请求真的很长」：这是一个只增不减的高水位
+        session.lastPromptTokens(9000);
+        assertTrue(manager.compactIfNeeded(session));
+
+        assertEquals(0, session.lastPromptTokens(), "压缩后必须让过期的真实用量失效");
+        // 历史上真正的问题是：信号停在峰值 -> 之后每一轮都白付一次摘要调用
+        assertFalse(manager.compactIfNeeded(session),
+                "上下文已远低于预算时不应再压缩（真实估算应主导信号）");
+        assertTrue(manager.compactionSignal(session) < 6000);
     }
 
     @Test

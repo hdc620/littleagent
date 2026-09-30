@@ -98,7 +98,7 @@ public final class AgentRuntime implements AutoCloseable {
 | `userId` | 用户标识，不能为空白；用于 session 归属校验（多用户隔离） |
 | `sessionId` | 窗口标识；`null`/空白 ⇒ 新建会话；已存在 ⇒ 续写该会话；属于他人 ⇒ 返回失败结果（`SESSION_ERROR`） |
 | `userInput` | 空白 ⇒ 立即返回 `Status.FAILED` + `errorCode=EMPTY_INPUT`，不产生任何 LLM 调用 |
-| 返回 | 永不抛异常：LLM 故障、工具故障、上下文故障都被收敛为 `AgentResult` |
+| 返回 | 永不抛异常：LLM 故障、工具故障、上下文故障都被收敛为 `AgentResult`。最外层还有一层兜底 `catch`（`RUNTIME_ERROR`），把锁、executor 生命周期这类边界异常也收敛掉 |
 | 幂等性 | 非幂等：每次调用都会向 session 追加 user 消息 |
 | 并发语义 | **同一 session 串行**（内部持锁，保证历史与工具配对一致）；**不同 session 完全并行** |
 | 超时 | 由 `AgentConfig.llmTimeoutSeconds`（单次 LLM）与 `toolTimeoutMs`（单次工具）共同约束 |
@@ -116,9 +116,14 @@ public final class AgentRuntime implements AutoCloseable {
 
 1. 模型给出不含工具调用的最终答案 → `Status.OK`；
 2. 达到 `maxSteps` → 禁用工具强制收尾 → `Status.MAX_STEPS`（再失败则返回确定性兜底文案）；
-3. LLM 连续两次返回空内容 → `Status.FAILED` + `EMPTY_MODEL_OUTPUT`；
+3. LLM **连续**两次返回空内容 → `Status.FAILED` + `EMPTY_MODEL_OUTPUT`
+   （**注意「连续」**：任何有产出的一步——成功执行工具或拿到最终答案——都会把计数器归零。
+   早期实现忘了归零，统计的是整轮**累计**空响应，于是「空响应 → 工具成功 → 空响应」这种正常序列会被判失败，
+   而且已经拿到的工具结果被丢弃。回归用例：`AgentLoopTest#emptyResponsesMustBeConsecutive`）；
 4. LLM 异常重试耗尽 → `Status.FAILED` + `LLM_*` 错误码；
-5. 同一 `工具名 + 相同参数` 超过 `maxRepeatedToolCalls` → 拦截并回灌 `REPEATED_CALL`（循环继续，不会死循环）。
+5. 同一 `工具名 + 相同参数` 超过 `maxRepeatedToolCalls` → 拦截并回灌 `REPEATED_CALL`（循环继续，不会死循环）；
+6. 工具执行段出现未预期异常 → 为每个未回灌的 `tool_call_id` **补一条占位 `tool` 消息**（保住协议配对），
+   然后返回 `Status.FAILED` + `TOOL_DISPATCH_ERROR`。
 
 ---
 
@@ -340,11 +345,22 @@ public record ParsedOutput(String thought, String finalAnswer,
 | 3 | ```json 代码块中形如 `{name|tool, arguments|parameters}` 的对象 | `TEXT_TOOL_CALLS` |
 | 4 | ReAct 文本 `Action: xxx` + `Action Input: {...}` | `TEXT_TOOL_CALLS` |
 | 5 | 整段正文就是一个工具调用 JSON | `TEXT_TOOL_CALLS` |
-| 6 | 其余非空正文 | `FINAL_ANSWER`（剥离 `<thought>` / `Thought:` 行） |
+| 6 | 其余非空正文 | `FINAL_ANSWER`（只剥离 `<thought>` 标签） |
 | 7 | 正文为空 | `EMPTY` |
 
 * 支撑函数：`extractJsonObjects(String)` 用**括号配平扫描**（识别字符串与转义），避免正则被嵌套参数对象打败。
-* 防误判：只有对象同时含「名称字段」与「参数类字段」才认定为工具调用，普通作答里的 JSON 不会被误执行。
+* **防误判靠工具名交叉校验**：`parse(response, Set<String> knownTools)` 会把「已注册工具名」传进文本兜底解析，
+  **名字不在注册表里就当普通正文**。早期版本不校验，于是模型回答里的
+  `{"name": "张三", "age": 30}`（接口示例、人名记录等）会被当成「调用工具 张三」并回灌 `UNKNOWN_TOOL`，
+  用户拿到的不是答案而是一段失败的工具回灌。两条有意的边界：
+  - **原生 `tool_calls` 不做名字过滤**：那是模型通过 API 正式发起的调用，名字错也应该走 `UNKNOWN_TOOL` 回灌让它自我修正；
+  - `knownTools == null` ⇒ 不校验（单测与离线回放用），生产由 `AgentRuntime` 传入 `ToolRegistry.names()`。
+* **思维链只剥标签，不剥裸行（这是一个实测出来的坑）**：`stripThoughtMarkers` 只移除 `<thought>…</thought>`。
+  早期实现连带剥离 `^(Thought|思考|推理|分析):` 的整行，于是一句完全正常的中文回答
+  `分析：接口超时是因为连接池太小。` 会被删空 → 解析成 `EMPTY` → 触发「空响应自愈」→ 连续两次整轮失败，
+  **用户的问题被彻底吞掉**（比误判工具调用更严重）。ReAct 的 `Thought:` 行不需要在这里处理：
+  只要正文出现 `Action:` 就会走工具调用分支。`thought` 字段仍通过 `extractThought` 抽取（只用于 trace/UI，不回灌模型）。
+  回归用例：`LlmOutputParserTest#keepsChineseAnswerStartingWithThoughtLikeMarker`。
 * 思维过程来源：`reasoning_content` → `<thought>` → `Thought:/思考:/推理:` 行。
 
 ### 5.7 `LlmException`
@@ -435,12 +451,15 @@ public final class ToolInvoker implements AutoCloseable {
 | 参数非对象 | 传了数组/标量 | 实际类型 / `BAD_ARGUMENTS_TYPE` |
 | Schema 校验 | 缺必填、类型错、枚举越界、越界值 | 逐字段可读错误 / `INVALID_ARGUMENTS` |
 | 类型纠偏 | `"top_k": "3"` 等 | 自动归一化后继续执行（不报错） |
-| 执行超时 | 超过 `timeoutMs` | `TOOL_TIMEOUT`（线程被中断） |
+| 执行超时 | 超过 `timeoutMs` | `TOOL_TIMEOUT`（**只是请求中断**：不响应 interrupt 的工具仍会跑完） |
 | 执行异常 | 工具抛错 | 异常类型 + 消息（**不含堆栈**）/ `TOOL_EXECUTION_ERROR` |
 | 调用被中断 | 线程中断 | `TOOL_INTERRUPTED` |
+| 执行器已关闭 | `close()` 之后再调用 | `TOOL_EXECUTOR_CLOSED`（**不抛 `RejectedExecutionException`**，折叠成可回灌结果） |
+| 其他运行时异常 | `submit`/`get` 之外的意外 | `TOOL_DISPATCH_ERROR` |
 | 结果过大 | 超过 `maxResultChars` | 截断并附「已截断 N 字」 |
 
 每次调用必定写两条 trace：`tool_call` 与 `tool_result`（含 `ok / errorCode / latencyMs / truncated`）。
+（`errorCode` 只在失败时出现——`Tracer.data(...)` 会丢弃 null 值，所以成功事件的 `data` 里没有这个键。）
 
 ### 6.5 `SchemaValidator`
 
@@ -499,15 +518,17 @@ public final class Session {
     public int turnCount();
     public String summary();            // 压缩摘要（长期记忆）
     public int summarizedUpTo();        // summary 覆盖 history[0, summarizedUpTo)
-    public int lastPromptTokens();      // 最近一次真实 prompt_tokens
+    public int lastPromptTokens();      // 最近一次真实 prompt_tokens（压缩信号）
     public void lastPromptTokens(int);
+    public void clearPromptTokensSignal();   // 压缩成功后让过期的真实用量失效
 
     public Message append(Message message);        // 打流水号；user 消息推进轮次
     public List<Message> history();                // 快照（不可变）
     public int historySize();
     public List<Message> historyFrom(int index);
     public void updateSummary(String summary, int summarizedUpTo);
-    public int estimatedTokens();
+    public int estimatedTokens();                  // 整条 history + 摘要 + 工作记忆
+    public int estimatedTokensFrom(int fromIndex);  // 只统计 [fromIndex, size)：压缩阈值用这个
     public <T> T withLock(Supplier<T> body);       // 会话级临界区
     public String brief();
 }
@@ -516,6 +537,14 @@ public final class Session {
 * 一个 Session = 一个窗口，独占：消息历史、工作记忆、压缩摘要与压缩位点、trace。
 * 所有写操作走同一把 `ReentrantLock`；读取返回快照，调用方无需再同步。
 * 状态常驻内存，因此「窗口可以随时被接着聊」。
+* **`estimatedTokens()` vs `estimatedTokensFrom()`**：压缩不会删除 history 里的原始消息（保留给召回用），
+  只把 `summarizedUpTo` 往前推。所以**压缩阈值必须用 `estimatedTokensFrom(summarizedUpTo())`**——
+  用全量历史会把「已经折进摘要、永远不会再进请求」的消息重复计一遍，实测表现为「压缩后估算反而变大」，
+  而且原始历史一旦超预算就每轮都触发压缩。
+* **`clearPromptTokensSignal()`**：`lastPromptTokens` 是只增不减的高水位。压缩改变了上下文形状后必须清掉它，
+  否则一次大 prompt 会让 `max(估算, 真实值)` 永远停在峰值（实测：signal 恒 9000 而真实估算只剩 538 →
+  每轮白付一次摘要调用）。清零后由下一次 LLM 调用写入新值，属于自校正。
+  回归用例：`ContextManagerTest#estimateExcludesCompressedHistory`、`#clearsStalePromptTokensAfterCompaction`。
 
 ### 7.2 `SessionManager`
 
@@ -643,7 +672,9 @@ public record ContextPackage(List<Message> messages, ContextStats stats) {
 
 ```java
 public interface Summarizer {
-    String summarize(String previousSummary, List<Message> messagesToCompress);
+    // tracer：会话级 tracer。压缩本身要调一次 LLM，这次调用必须和主循环调用一样在 trace 里可见
+    // （含 prompt/completion tokens）；传 null 时实现应降级为 noop。
+    String summarize(String previousSummary, List<Message> messagesToCompress, Tracer tracer);
     default String name();
 }
 
@@ -653,8 +684,14 @@ public final class LlmSummarizer implements Summarizer {
     public LlmSummarizer(LlmClient llm, String model, Summarizer fallback);
 }
 
-public final class DeterministicSummarizer implements Summarizer { }
+public final class DeterministicSummarizer implements Summarizer { }   // 不调 LLM，忽略 tracer
 ```
+
+> **为什么签名里有 `Tracer`**：早期实现固定传 `Tracer.noop()`，于是压缩那次 LLM 调用既不产生 trace 事件、
+> usage 也被丢弃 —— 实测一次 10 轮对话里 19 次真实 API 调用有 6 次在 trace 里完全查不到，
+> 约 6.5 秒的摘要耗时也没有归属，「全链路可观测」这条承诺不成立。
+> 现在由 `ContextManager.compact` 把 `session.tracer()` 传进来；压缩的用量在 `llm_response` 事件里可见。
+> **注意口径**：`AgentResult.totalUsage()` 只统计主循环用量，压缩的 token 不计入它。
 
 ### 8.4 `MemoryRecaller`
 
@@ -668,8 +705,13 @@ public final class MemoryRecaller {
 }
 ```
 
-打分 = 关键词重叠（CJK bigram / 英文词，长度≥2 权重 1.0） × 角色权重（user 1.6 / tool 1.2 / assistant 1.0）
-× 时间衰减（越新越高） ÷ 长度惩罚（长文降权，避免长工具输出霸榜）。仅保留分数 > 0 的片段。
+打分 = 关键词重叠（CJK bigram / 英文词，长度≥2 权重 1.0，长度 1 的 CJK 单字权重 0.4）
+× 角色权重（user 1.6 / tool 1.2 / assistant 1.0）
+× 时间衰减（越新越高） × 长度惩罚（长文降权，避免长工具输出霸榜）。仅保留分数 > 0 的片段。
+
+**已知缺口**：最小相关度就是「任意一个 bigram 重叠」，没有停用词/IDF，所以「帮我看看这个报错」会把
+「帮我查一下杭州的天气」（共享「帮我」）召回进 system 块。生产化应加停用词与分数下限，或整体换成向量检索。
+另外 `Texts.tokenize` 会丢掉长度 < 2 的 ASCII 词，纯英文短查询（如 `"a b c"`）召回不到任何东西。
 
 ---
 
@@ -842,8 +884,11 @@ AgentRuntime runtime = AgentRuntime.builder(config).toolRegistry(registry).build
 | `SESSION_ERROR` | `AgentResult.errorCode` | 打开会话失败（含越权） |
 | `EMPTY_INPUT` | `AgentResult` | 用户输入为空 |
 | `CONTEXT_ERROR` | `AgentResult` | 上下文组装失败 |
-| `EMPTY_MODEL_OUTPUT` | `AgentResult` | 模型连续两次返回空内容 |
+| `EMPTY_MODEL_OUTPUT` | `AgentResult` | 模型**连续**两次返回空内容（中间有产出会归零） |
 | `MAX_STEPS_REACHED` | `AgentResult` | 达到最大步数，已强制收尾 |
+| `RUNTIME_ERROR` | `AgentResult` | 最外层兜底：锁/executor 等边界处逃逸的未预期异常（`run()` 因此永不抛异常） |
+| `TOOL_DISPATCH_ERROR` | `AgentResult` / 工具结果 | 工具执行段出现未预期异常（已为未执行的调用补占位 `tool` 消息） |
+| `TOOL_EXECUTOR_CLOSED` | 工具结果 | `ToolInvoker.close()` 之后再调用（`executor.submit` 被拒），折叠成可回灌结果而非抛异常 |
 | `LLM_NETWORK_ERROR` | `LlmException` | 网络异常（可重试） |
 | `LLM_RATE_LIMITED` | `LlmException` | 429 限流（可重试，退避加倍） |
 | `LLM_SERVER_ERROR` | `LlmException` | 5xx（可重试） |

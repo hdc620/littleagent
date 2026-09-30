@@ -94,7 +94,7 @@ class AgentLoopTest {
     }
 
     @Test
-    @DisplayName("一轮内可以并发发起多个工具调用")
+    @DisplayName("一轮内一次请求发起多个工具调用（当前按顺序串行执行，尚未并行化）")
     void executesMultipleToolsInOneStep() {
         ScriptedLlmClient llm = ScriptedLlmClient.create(
                 ScriptedLlmClient.calls(
@@ -225,6 +225,113 @@ class AgentLoopTest {
 
         assertEquals(AgentResult.Status.FAILED, result.status());
         assertEquals("EMPTY_MODEL_OUTPUT", result.errorCode());
+    }
+
+    @Test
+    @DisplayName("空响应计数是「连续」而不是「累计」：中间有产出就归零")
+    void emptyResponsesMustBeConsecutive() {
+        // 空 -> 工具调用成功 -> 空 -> 正常回答
+        // 早期实现里 emptyResponses 从不归零，第 3 步就被判 EMPTY_MODEL_OUTPUT 失败，
+        // 而且第 2 步拿到的工具结果被直接丢掉（与注释/文档写的「连续两次」不符）。
+        ScriptedLlmClient llm = ScriptedLlmClient.create(
+                LlmResponse.text(""),
+                ScriptedLlmClient.call("calculator", "{\"expression\":\"1+1\"}"),
+                LlmResponse.text(""),
+                ScriptedLlmClient.text("1+1 等于 2。"));
+        runtime = runtime(llm, 6);
+
+        AgentResult result = runtime.run("A", "w1", "1+1 等于几");
+
+        assertEquals(AgentResult.Status.OK, result.status(),
+                "空响应之间夹着一次成功的工具调用，不应该被判失败");
+        assertEquals("1+1 等于 2。", result.answer());
+        assertEquals(1, result.toolCallCount(), "工具结果不应被丢弃");
+        assertEquals(4, llm.callCount());
+    }
+
+    @Test
+    @DisplayName("Runtime 被 close() 之后：工具故障收敛成结果，不抛异常、不毒化 session")
+    void toolDispatchFailureDoesNotPoisonSession() {
+        ScriptedLlmClient llm = ScriptedLlmClient.create(
+                ScriptedLlmClient.call("calculator", "{\"expression\":\"1+1\"}"))
+                .onExhausted(ScriptedLlmClient.text("好的。"));
+        runtime = runtime(llm, 6);
+        // 关掉 runtime => ToolInvoker 的线程池已 shutdown，
+        // executor.submit 会抛 RejectedExecutionException（真实存在的故障路径）
+        runtime.close();
+
+        AgentResult result = runtime.run("A", "w1", "1+1 等于几");
+
+        // 1) 不抛异常；工具故障被折叠成结构化结果并回灌，循环照常收尾
+        assertEquals(AgentResult.Status.OK, result.status());
+        assertEquals(1, result.toolCallCount());
+        AgentResult.ToolOutcome outcome = result.steps().get(0).outcomes().get(0);
+        assertFalse(outcome.ok());
+        assertEquals("TOOL_EXECUTOR_CLOSED", outcome.errorCode());
+        // 2) 配对不变式：每个 tool_call_id 都有对应的 tool 消息
+        Session session = runtime.sessions().require("A", "w1");
+        assertEquals(0, countOrphanToolCalls(session), "不应留下没有 tool 回应的 assistant(tool_calls)");
+        // 3) session 没被毒化：再问一轮仍然能正常走完
+        AgentResult next = runtime.run("A", "w1", "那 2+2 呢");
+        assertEquals(AgentResult.Status.OK, next.status());
+        assertEquals(0, countOrphanToolCalls(session));
+    }
+
+    @Test
+    @DisplayName("写入侧守住配对不变式：补占位 tool 消息，消灭孤儿的 assistant(tool_calls)")
+    void repairsOrphanToolCalls() {
+        runtime = runtime(ScriptedLlmClient.create(ScriptedLlmClient.text("x")), 6);
+        Session session = runtime.sessions().create("A", "w1", "t");
+        ToolCall first = ToolCall.of("calculator", "{\"expression\":\"1+1\"}");
+        ToolCall second = ToolCall.of("weather", "{\"city\":\"北京\"}");
+        // 模拟「模型请求了两个工具，但执行段在第一个之前就抛了」的中间状态
+        session.append(Message.user("查天气并算 1+1"));
+        session.append(Message.assistantToolCalls(null, null, List.of(first, second)));
+
+        AgentRuntime.appendUnansweredToolPlaceholders(session, List.of(first, second), 0,
+                new IllegalStateException("模拟调度故障"));
+
+        List<Message> history = session.history();
+        assertEquals(4, history.size(), "1 条 user + 1 条 assistant(tool_calls) + 2 条占位 tool");
+        assertEquals(Role.ASSISTANT, history.get(1).role());
+        assertEquals(2, history.get(1).toolCalls().size());
+        assertEquals(Role.TOOL, history.get(2).role());
+        assertEquals(Role.TOOL, history.get(3).role());
+        assertEquals(first.id(), history.get(2).toolCallId());
+        assertEquals(second.id(), history.get(3).toolCallId());
+        assertTrue(history.get(2).content().startsWith("[TOOL_ERROR]"));
+        assertTrue(history.get(2).content().contains("未执行"));
+        assertEquals(0, countOrphanToolCalls(session));
+
+        // 只补「未回灌」的那部分：answered=1 时第一条不应被重复补
+        Session second_ = runtime.sessions().create("A", "w2", "t");
+        second_.append(Message.assistantToolCalls(null, null, List.of(first, second)));
+        AgentRuntime.appendUnansweredToolPlaceholders(second_, List.of(first, second), 1,
+                new IllegalStateException("模拟调度故障"));
+        assertEquals(2, second_.historySize(), "已回灌的调用不应再补占位消息");
+        assertEquals(second.id(), second_.history().get(1).toolCallId());
+    }
+
+    /** 统计「带 tool_calls 的 assistant 消息里，没有任何 tool 消息回应的调用」数量。 */
+    private static int countOrphanToolCalls(Session session) {
+        List<Message> history = session.history();
+        java.util.Set<String> answered = new java.util.HashSet<>();
+        for (Message m : history) {
+            if (m.role() == Role.TOOL && m.toolCallId() != null) {
+                answered.add(m.toolCallId());
+            }
+        }
+        int orphans = 0;
+        for (Message m : history) {
+            if (m.role() == Role.ASSISTANT && m.hasToolCalls()) {
+                for (ToolCall call : m.toolCalls()) {
+                    if (!answered.contains(call.id())) {
+                        orphans++;
+                    }
+                }
+            }
+        }
+        return orphans;
     }
 
     @Test

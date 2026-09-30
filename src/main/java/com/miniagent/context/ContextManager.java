@@ -189,15 +189,20 @@ public final class ContextManager {
             long start = System.nanoTime();
             String merged;
             try {
-                merged = summarizer.summarize(session.summary(), toCompress);
+                merged = summarizer.summarize(session.summary(), toCompress, tracer);
             } catch (RuntimeException e) {
                 tracer.failure(TraceTypes.CONTEXT_COMPRESS_FAILED, "摘要生成失败，改用确定性压缩", e);
-                merged = new DeterministicSummarizer().summarize(session.summary(), toCompress);
+                merged = new DeterministicSummarizer().summarize(session.summary(), toCompress, tracer);
             }
             if (Texts.isBlank(merged)) {
                 merged = session.summary();
             }
             session.updateSummary(merged, keepFrom);
+            // 压缩改变了上下文形状：上次测量的真实 prompt_tokens 不再代表当前上下文。
+            // 不清掉的话 max(估算, lastPromptTokens) 会被这个过期峰值长期顶住 ——
+            // 实测「一次 9000 token 的 prompt」会让之后每一轮都触发压缩（即使估算只剩 538），
+            // 每轮白付一次摘要调用。清零后由下一次 LLM 调用写入新的精确值，属于自校正。
+            session.clearPromptTokensSignal();
             long costMs = (System.nanoTime() - start) / 1_000_000L;
             int estimatedAfter = estimate(session);
             tracer.event(TraceTypes.CONTEXT_COMPRESSED,
@@ -207,6 +212,7 @@ public final class ContextManager {
                             "summarizedUpTo", keepFrom,
                             "tokensBefore", estimatedBefore,
                             "tokensAfter", estimatedAfter,
+                            "shrank", estimatedAfter < estimatedBefore,
                             "promptTokensSignal", signal,
                             "maxContextTokens", maxContextTokens,
                             "summaryChars", merged.length(),
@@ -215,9 +221,15 @@ public final class ContextManager {
         });
     }
 
-    /** 当前会话的估算 token（历史 + 摘要 + 工作记忆 + 固定开销）。 */
+    /**
+     * 当前会话的估算 token = **未压缩的**历史 + 摘要 + 工作记忆 + 固定开销。
+     *
+     * <p>必须从 {@code summarizedUpTo} 开始统计：{@code history[0, summarizedUpTo)} 已经被折进摘要，
+     * 不会再进请求，算两次会让估算系统性偏高（实测表现为「压缩后估算反而变大」，
+     * 且原始历史一旦超预算就每轮都触发压缩）。
+     */
     public int estimate(Session session) {
-        return session.estimatedTokens() + staticOverheadTokens;
+        return session.estimatedTokensFrom(session.summarizedUpTo()) + staticOverheadTokens;
     }
 
     /** 固定开销估算（system prompt + 工具 Schema），测试与文档用。 */

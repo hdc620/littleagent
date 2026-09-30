@@ -85,12 +85,11 @@ public final class EnvLoader {
 
     private static Map<String, String> loadFiles() {
         Map<String, String> values = new HashMap<>();
-        Path dir = Paths.get("").toAbsolutePath();
-        // 从当前目录向上找 3 层，方便在子目录里执行命令
-        for (int depth = 0; depth < 4 && dir != null; depth++) {
+        // 从 CWD 向上读到项目根（pom.xml/.git）为止，而不是写死「向上 N 层」：
+        // 写死层数时，从 src/main/java/com/miniagent 这类深层目录启动就会差一层、静默读不到配置。
+        for (Path dir : ProjectPaths.configSearchDirs(Paths.get("").toAbsolutePath())) {
             readInto(values, dir.resolve(".env"));
             readInto(values, dir.resolve(".env.local"));
-            dir = dir.getParent();
         }
         return values;
     }

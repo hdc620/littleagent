@@ -150,4 +150,75 @@ class LlmOutputParserTest {
         assertEquals(1, parsed.toolCalls().size());
         assertEquals("{\"expression\":\"1+1\"}", parsed.toolCalls().get(0).argumentsJson());
     }
+
+    // ------------------------------------------------ 思考链剥离 与 工具名交叉校验
+
+    @Test
+    @DisplayName("中文回答以「分析：/思考：/推理：」开头时不能被当成思维链删掉")
+    void keepsChineseAnswerStartingWithThoughtLikeMarker() {
+        // 回归：早期实现无条件剥离 ^(Thought|思考|推理|分析): 的整行，
+        // 于是一句完全正常的中文回答被删空 -> 解析成 EMPTY -> Runtime 走「空响应自愈」，
+        // 连续两次整轮失败。用户的问题被彻底吞掉（比误判工具调用更严重）。
+        for (String marker : List.of("分析", "思考", "推理")) {
+            String content = marker + "：接口超时是因为连接池太小。";
+            ParsedOutput parsed = LlmOutputParser.parse(LlmResponse.text(content));
+
+            assertEquals(ParsedOutput.Mode.FINAL_ANSWER, parsed.mode(), marker + " 开头的回答不应被判成空响应");
+            assertEquals(content, parsed.finalAnswer(), "答案必须原样返回，不能被删除");
+        }
+    }
+
+    @Test
+    @DisplayName("<thought> 标签仍然被剥离（思维链不回灌、也不当答案）")
+    void stillStripsThoughtTagFromAnswer() {
+        ParsedOutput parsed = LlmOutputParser.parse(
+                LlmResponse.text("<thought>先看连接池配置</thought>\n连接池太小，建议调到 20。"));
+
+        assertEquals(ParsedOutput.Mode.FINAL_ANSWER, parsed.mode());
+        assertEquals("连接池太小，建议调到 20。", parsed.finalAnswer());
+        assertEquals("先看连接池配置", parsed.thought());
+    }
+
+    @Test
+    @DisplayName("文本兜底只接受已注册的工具名：普通作答里的 name 字段不会被当成工具调用")
+    void textFallbackOnlyAcceptsRegisteredToolNames() {
+        java.util.Set<String> known = java.util.Set.of("calculator", "search", "todo");
+
+        // 1) 名字不在注册表里 -> 回落成普通正文（否则会被执行成「调用工具 张三」）
+        ParsedOutput prose = LlmOutputParser.parse(LlmResponse.text(
+                "这是接口示例：\n```json\n{\"name\": \"张三\", \"age\": 30}\n```\n请按这个结构填。"), known);
+        assertEquals(ParsedOutput.Mode.FINAL_ANSWER, prose.mode());
+        assertTrue(prose.finalAnswer().contains("张三"));
+
+        // 2) 名字在注册表里 -> 正常解析成工具调用
+        ParsedOutput call = LlmOutputParser.parse(LlmResponse.text(
+                "<tool_call>{\"name\":\"search\",\"arguments\":{\"query\":\"周报模板\"}}</tool_call>"), known);
+        assertEquals(ParsedOutput.Mode.TEXT_TOOL_CALLS, call.mode());
+        assertEquals("search", call.toolCalls().get(0).name());
+
+        // 3) 完全不认识的名字也不该变成工具调用
+        ParsedOutput unknown = LlmOutputParser.parse(LlmResponse.text(
+                "{\"tool\": \"delete_all_files\", \"parameters\": {}}"), known);
+        assertEquals(ParsedOutput.Mode.FINAL_ANSWER, unknown.mode());
+    }
+
+    @Test
+    @DisplayName("原生 tool_calls 不做名字过滤（幻觉工具应交给 UNKNOWN_TOOL 回灌去纠正）")
+    void nativeToolCallsAreNotFilteredByName() {
+        LlmResponse response = new LlmResponse(null, null,
+                List.of(ToolCall.of("send_email", "{\"to\":\"boss\"}")), "tool_calls", Usage.ZERO, null);
+
+        ParsedOutput parsed = LlmOutputParser.parse(response, java.util.Set.of("calculator"));
+
+        assertEquals(ParsedOutput.Mode.NATIVE_TOOL_CALLS, parsed.mode());
+        assertEquals("send_email", parsed.toolCalls().get(0).name());
+    }
+
+    @Test
+    @DisplayName("不传注册表时保持旧行为（不校验），便于单测与离线回放")
+    void withoutKnownToolsNoFiltering() {
+        ParsedOutput parsed = LlmOutputParser.parse(
+                LlmResponse.text("{\"name\":\"张三\",\"arguments\":{}}"));
+        assertEquals(ParsedOutput.Mode.TEXT_TOOL_CALLS, parsed.mode());
+    }
 }

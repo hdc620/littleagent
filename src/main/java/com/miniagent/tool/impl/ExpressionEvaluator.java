@@ -273,10 +273,30 @@ public final class ExpressionEvaluator {
         return false;
     }
 
-    /** 结果格式化：整数不带小数点，小数去掉多余 0。 */
+    /**
+     * 结果格式化：整数不带小数点，小数去掉多余 0。
+     *
+     * <p><b>为什么不用 epsilon 判整数</b>：早期实现写的是
+     * {@code Math.abs(value - Math.rint(value)) < 1e-9}。这个阈值是**绝对值**，与量级无关，于是：
+     * <ul>
+     *   <li>{@code 1/10000000000} → 1e-10 落在阈值内 → 被当成整数打印成 {@code 0}（把非零结果变成 0，最严重）；</li>
+     *   <li>{@code 3 - 0.0000000001} → 距整数 1e-10 → 被当成整数打印成 {@code 3}（把非整数打印成整数）。</li>
+     * </ul>
+     * 现在改为**精确比较** {@code value == Math.rint(value)}：只有真的等于某个整数才走整型分支，
+     * 其余一律交给 {@link java.math.BigDecimal#valueOf} → {@code toPlainString()}，
+     * 由十进制展开负责显示（1e-10 会正确显示为 {@code 0.0000000001}）。
+     *
+     * <p>注意这不是任意精度计算：求值本身仍是 IEEE 754 double（{@code 0.1+0.2} 会得到
+     * {@code 0.30000000000000004}）。要精确十进制就该全程用 BigDecimal，
+     * 但那样就无法直接支持 {@code sin/log/pow} 这些超越函数 —— 这是刻意的取舍。
+     */
     public static String format(double value) {
-        if (Math.abs(value - Math.rint(value)) < 1e-9 && Math.abs(value) < 1e15) {
-            return Long.toString((long) Math.rint(value));
+        if (!Double.isFinite(value)) {
+            // NaN / ±Infinity：BigDecimal.valueOf 会抛异常，先挡住（求值层通常已经拒绝，这里是兜底）
+            return Double.toString(value);
+        }
+        if (Math.abs(value) < 1e15 && value == Math.rint(value)) {
+            return Long.toString((long) value);
         }
         return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }

@@ -40,14 +40,42 @@ public final class LlmOutputParser {
     private LlmOutputParser() {
     }
 
+    /**
+     * 解析模型输出（不做工具名过滤，等价于 {@code parse(response, null)}）。
+     *
+     * <p>生产路径请用 {@link #parse(LlmResponse, java.util.Set)} 并传入已注册的工具名 —— 见那个方法的说明。
+     */
     public static ParsedOutput parse(LlmResponse response) {
+        return parse(response, null);
+    }
+
+    /**
+     * 解析模型输出，并用「已注册工具名」校验文本兜底解析出来的调用。
+     *
+     * <h2>为什么要传 knownTools（实测出来的坑）</h2>
+     * 文本兜底只要在 JSON 里看到一个名称字段就认定是工具调用。于是模型一句完全正常的回答
+     * <pre>这是接口示例：{"name": "张三", "department": "市场部"}</pre>
+     * 会被解析成「调用工具 张三」，Runtime 回灌 {@code UNKNOWN_TOOL}，
+     * **用户拿到的不是答案，而是一段失败的工具回灌**。
+     *
+     * <p>所以文本兜底必须做交叉校验：**名字不在注册表里就当普通正文**。
+     * 注意两条边界（都是有意的）：
+     * <ul>
+     *   <li><b>原生 tool_calls 不做过滤</b>：那是模型通过 API 正式发起的调用，名字错也应该走
+     *       {@code UNKNOWN_TOOL} 回灌让模型自我修正，不能悄悄丢掉；</li>
+     *   <li>{@code knownTools == null} 表示「不校验」（保持单测与离线回放的可用性）。</li>
+     * </ul>
+     *
+     * @param knownTools 已注册的工具名；null 表示不校验
+     */
+    public static ParsedOutput parse(LlmResponse response, Set<String> knownTools) {
         if (response == null) {
             return new ParsedOutput(null, null, List.of(), ParsedOutput.Mode.EMPTY);
         }
         String content = response.content() == null ? "" : response.content();
         String thought = Texts.blankToEmpty(response.reasoning());
 
-        // 1) 原生 tool_calls 优先
+        // 1) 原生 tool_calls 优先（不做名字过滤：让模型收到 UNKNOWN_TOOL 反馈去自我修正）
         if (response.hasNativeToolCalls()) {
             String fromContent = Texts.blankToEmpty(content);
             String merged = thought.isEmpty() ? fromContent : (fromContent.isEmpty() ? thought : thought + "\n" + fromContent);
@@ -55,8 +83,8 @@ public final class LlmOutputParser {
                     ParsedOutput.Mode.NATIVE_TOOL_CALLS);
         }
 
-        // 2) 文本兜底解析工具调用
-        List<ToolCall> fallback = parseTextToolCalls(content);
+        // 2) 文本兜底解析工具调用（只接受注册表里存在的名字）
+        List<ToolCall> fallback = parseTextToolCalls(content, knownTools);
         String extractedThought = extractThought(content);
         String mergedThought = joinThought(thought, extractedThought);
         if (!fallback.isEmpty()) {
@@ -77,6 +105,10 @@ public final class LlmOutputParser {
     // ------------------------------------------------------------ 文本兜底解析
 
     static List<ToolCall> parseTextToolCalls(String content) {
+        return parseTextToolCalls(content, null);
+    }
+
+    static List<ToolCall> parseTextToolCalls(String content, Set<String> knownTools) {
         if (content == null || content.isBlank()) {
             return List.of();
         }
@@ -86,7 +118,7 @@ public final class LlmOutputParser {
         // (a) <tool_call>...</tool_call>
         Matcher tagMatcher = TOOL_CALL_TAG.matcher(content);
         while (tagMatcher.find()) {
-            collect(calls, seen, tagMatcher.group(1));
+            collect(calls, seen, tagMatcher.group(1), knownTools);
         }
 
         // (b) ReAct: Action: name  +  Action Input: {...}
@@ -98,26 +130,26 @@ public final class LlmOutputParser {
             if (inputMatcher.find()) {
                 arguments = normalizeArguments(inputMatcher.group(1).strip());
             }
-            add(calls, seen, name, arguments);
+            add(calls, seen, name, arguments, knownTools);
         }
 
         // (c) ```json ... ``` 代码块中的工具调用对象
         Matcher fenced = FENCED.matcher(content);
         while (fenced.find()) {
-            collect(calls, seen, fenced.group(1));
+            collect(calls, seen, fenced.group(1), knownTools);
         }
 
         // (d) 整段正文就是一个工具调用 JSON
         if (calls.isEmpty()) {
             String trimmed = content.strip();
             if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-                collect(calls, seen, trimmed);
+                collect(calls, seen, trimmed, knownTools);
             }
         }
         return calls;
     }
 
-    private static void collect(List<ToolCall> calls, Set<String> seen, String jsonFragment) {
+    private static void collect(List<ToolCall> calls, Set<String> seen, String jsonFragment, Set<String> knownTools) {
         for (String candidate : extractJsonObjects(jsonFragment)) {
             JsonNode node = com.miniagent.util.Json.parseOrNull(candidate);
             if (node == null || !node.isObject()) {
@@ -125,12 +157,19 @@ public final class LlmOutputParser {
             }
             ToolCall call = toToolCall(node);
             if (call != null) {
-                add(calls, seen, call.name(), call.argumentsJson());
+                add(calls, seen, call.name(), call.argumentsJson(), knownTools);
             }
         }
     }
 
-    private static void add(List<ToolCall> calls, Set<String> seen, String name, String argumentsJson) {
+    /**
+     * @param knownTools 已注册工具名；非 null 时**名字不在其中就不算工具调用**（回落成普通正文）
+     */
+    private static void add(List<ToolCall> calls, Set<String> seen, String name, String argumentsJson,
+                            Set<String> knownTools) {
+        if (knownTools != null && !knownTools.contains(name)) {
+            return;
+        }
         ToolCall call = ToolCall.of(name, argumentsJson);
         if (seen.add(call.signature())) {
             calls.add(call);
@@ -255,13 +294,26 @@ public final class LlmOutputParser {
         return sb.length() == 0 ? null : sb.toString();
     }
 
-    /** 去掉 &lt;thought&gt; 标签与 Thought: 行，避免把思维过程当答案回给用户。 */
+    /**
+     * 去掉思维链标记，避免把思维过程当答案回给用户。
+     *
+     * <p><b>只剥 {@code <thought>} 标签，不剥裸的「Thought/思考/推理/分析」行 —— 这是一个实测出来的坑。</b>
+     * 早期实现无条件剥离匹配 {@code ^(Thought|思考|推理|分析):} 的整行，于是模型一句完全正常的回答
+     * <pre>分析：接口超时是因为连接池太小。</pre>
+     * 会被整行删空 → 解析成 {@link ParsedOutput.Mode#EMPTY} → Runtime 走「空响应自愈」分支、注入
+     * 「你上一条回复为空」，连续两次就整轮失败。**用户的问题被彻底吞掉，比误判工具调用更糟**，
+     * 而中文模型极爱用「分析：」「结论：」这类开头。
+     *
+     * <p>ReAct 风格的 {@code Thought:} 行不需要在这里处理：只要正文里出现 {@code Action:}，
+     * {@link #parseTextToolCalls} 就会把它判定成工具调用、走另一条分支（见 {@link #ACTION}），
+     * 根本不会走到最终答案路径。{@link #extractThought} 仍然会把这类行抽出来放进 thought 字段
+     * （只用于 trace/UI，不回灌模型），所以观测能力不受影响。
+     */
     static String stripThoughtMarkers(String content) {
         if (content == null) {
             return "";
         }
-        String withoutTags = THOUGHT_TAG.matcher(content).replaceAll("");
-        return THOUGHT_LINE.matcher(withoutTags).replaceAll("");
+        return THOUGHT_TAG.matcher(content).replaceAll("");
     }
 
     private static String joinThought(String a, String b) {

@@ -90,7 +90,7 @@ class MemoryRecallerTest {
                 Message.assistant("杭州今天多云。", null));
 
         LlmSummarizer summarizer = new LlmSummarizer(broken, "test-model");
-        String summary = summarizer.summarize("", toCompress);
+        String summary = summarizer.summarize("", toCompress, null);
 
         assertTrue(summary.contains("用户诉求"));
         assertTrue(summary.contains("杭州"));
@@ -101,7 +101,7 @@ class MemoryRecallerTest {
     @DisplayName("LLM 摘要返回空内容时同样降级")
     void summarizerFallsBackOnEmptyOutput() {
         LlmClient emptyClient = (request, tracer) -> LlmResponse.text("   ");
-        String summary = new LlmSummarizer(emptyClient, "m").summarize("旧摘要", List.of(Message.user("问题")));
+        String summary = new LlmSummarizer(emptyClient, "m").summarize("旧摘要", List.of(Message.user("问题")), null);
         assertTrue(summary.contains("确定性压缩") || summary.contains("旧摘要"));
     }
 
@@ -115,10 +115,36 @@ class MemoryRecallerTest {
             return new LlmResponse("- 用户想查天气\n- 待办：发周报", null, List.of(), "stop", Usage.ZERO, null);
         };
         String summary = new LlmSummarizer(client, "m")
-                .summarize("旧摘要：用户问过北京", List.of(Message.user("再查一次")));
+                .summarize("旧摘要：用户问过北京", List.of(Message.user("再查一次")), null);
 
         assertTrue(summary.startsWith("- 用户想查天气"));
         assertTrue(captured.toString().contains("旧摘要：用户问过北京"));
+    }
+
+    @Test
+    @DisplayName("压缩用的 LLM 调用必须写进会话 trace（否则「一次问答打了几次 API」对不上账）")
+    void summarizerWritesTraceWithSessionTracer() {
+        LlmClient client = (request, tracer) -> {
+            tracer.event("llm_request", "summarizer");
+            return new LlmResponse("- 用户想查天气", null, List.of(), "stop",
+                    Usage.of(123, 45), null);
+        };
+        Tracer tracer = Tracer.of("s-compress");
+
+        String summary = new LlmSummarizer(client, "m").summarize("", List.of(Message.user("查天气")), tracer);
+
+        assertEquals("- 用户想查天气", summary);
+        // 回归：早期实现传的是 Tracer.noop()，实测一次 10 轮对话里 19 次真实 API 调用
+        // 有 6 次在 trace 里完全查不到，压缩耗的 1s+ 也没有归属。
+        assertTrue(tracer.events().stream().anyMatch(e -> e.type().equals("llm_request")),
+                "压缩调用必须落到会话级 tracer 上");
+    }
+
+    @Test
+    @DisplayName("tracer 为 null 时压缩依然可用（降级为 noop，不抛 NPE）")
+    void summarizerToleratesNullTracer() {
+        LlmClient client = (request, tracer) -> LlmResponse.text("- 摘要");
+        assertEquals("- 摘要", new LlmSummarizer(client, "m").summarize("", List.of(Message.user("x")), null));
     }
 
     @Test
@@ -130,7 +156,7 @@ class MemoryRecallerTest {
                 Message.tool("c2", "todo", "已加入待办 #1：发周报"),
                 Message.assistant("已记录。", null));
 
-        String summary = new DeterministicSummarizer().summarize("", messages);
+        String summary = new DeterministicSummarizer().summarize("", messages, null);
 
         assertTrue(summary.contains("发周报"));
         assertTrue(summary.contains("北京阵雨"));

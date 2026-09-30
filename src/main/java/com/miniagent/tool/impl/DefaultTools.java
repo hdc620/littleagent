@@ -2,7 +2,6 @@ package com.miniagent.tool.impl;
 
 import com.miniagent.tool.ToolRegistry;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -11,9 +10,6 @@ import java.nio.file.Paths;
  * 便于替换实现（例如把 mock search 换成真实搜索）。
  */
 public final class DefaultTools {
-
-    /** 向上查找的层数，与 {@code EnvLoader} 找 .env 的策略保持一致。 */
-    private static final int MAX_LOOKUP_DEPTH = 4;
 
     private DefaultTools() {
     }
@@ -40,6 +36,11 @@ public final class DefaultTools {
      * 从子目录执行、或测试运行器的 CWD 都可能不是项目根目录。若只按 CWD 解析，
      * 知识库会静默降级为空库 —— 表现是 search 一直返回「没有检索到」，很难排查。
      *
+     * <p>查找终止条件是**项目根锚点**（{@code pom.xml} / {@code .git} 等，见
+     * {@link com.miniagent.util.ProjectPaths}），而不是写死的层数：写死层数时，
+     * 从 {@code src/main/java/com/miniagent}（距根 4 层）启动就会刚好差一层，
+     * 症状与被修复前一模一样。
+     *
      * @param configured 配置里的目录（可为相对路径或绝对路径，null 表示默认 docs/knowledge）
      * @return 实际可用的目录；全部找不到时返回原配置值，由 {@link KnowledgeBase} 降级为空库
      */
@@ -49,17 +50,6 @@ public final class DefaultTools {
 
     static Path resolveKnowledgeDir(Path configured, Path startDir) {
         Path candidate = configured == null ? Path.of("docs", "knowledge") : configured;
-        if (candidate.isAbsolute() || startDir == null) {
-            return candidate;
-        }
-        Path dir = startDir;
-        for (int depth = 0; depth < MAX_LOOKUP_DEPTH && dir != null; depth++) {
-            Path probe = dir.resolve(candidate);
-            if (Files.isDirectory(probe)) {
-                return probe;
-            }
-            dir = dir.getParent();
-        }
-        return candidate;
+        return com.miniagent.util.ProjectPaths.findUpwards(startDir, candidate);
     }
 }
