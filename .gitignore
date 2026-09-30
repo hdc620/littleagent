@@ -25,6 +25,48 @@ traces/
 # 代码审计时产生的复现脚本与运行证据
 audit-*.log
 audit-*.jsh
+idea-real-demo.log
+
+# ---- 非本项目的文件（本机其他工具/进程往这个目录写的，不要提交）----
+# 说明：这些不是 mini-agent 的产物，只是恰好落在同一个目录里。
+# 用精确文件名而不是 *.log / *.mjs 这种宽泛规则，避免误伤本项目将来真要提交的文件。
+cfg.log
+cfg.err
+cfg2.log
+cfg2.err
+cfg3.log
+cfg3.err
+cfg4.log
+cfg4.err
+hl*.log
+hl*.err
+t1.log
+t1.err
+t2.log
+t2.err
+t3.log
+t3.err
+t4.log
+t4.err
+t5.log
+t5.err
+cli-probe.log
+cli-probe.err
+headless-test.log
+headless-test.err
+engine-shot.png
+engine-test.mjs
+plugin-load-test.mjs
+shot-test.png
+imgprobe.mjs
+orb-readme.md
+orb-study/
+install-workbuddy-065.log
+pnpm-installed
+restart-dsh-workbuddy.cmd
+restart-dsh-workbuddy.ps1
+verify-workbuddy-decrypt.mjs
+wb-readme.md
 
 # ---- IDE ----
 # 保留共享的 Run Configuration，其余 .idea 内容忽略
