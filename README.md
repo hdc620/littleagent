@@ -397,6 +397,7 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 
 | 测试类 | 用例数 | 覆盖点 |
 | --- | --- | --- |
+| `RequirementAcceptanceTest` | 28 | **验收测试**：题面每条要求一个用例（`@DisplayName` 抄题面原文），全部离线。要求 1 不依赖框架（扫描运行期类路径）、要求 2 循环四步 / 5 个工具 / Schema 决策 / 四种输出解析 / 窗口隔离与续聊 / 跨用户越权 / 记住状态 / 两种追问 / 压缩生效且估算变小 / 四类工具异常收敛 / trace 落 JSONL、要求 3 测试用例。**IDEA 里右键即可看到逐条绿/红** |
 | `AgentLoopTest` | 18 | 循环四步、一轮内一次请求发起多个工具调用（当前按顺序串行执行，尚未并行化）、maxSteps 强制收尾、工具错误自愈、未知工具、重复调用拦截、空输出自愈（空响应计数必须**连续**，中间有产出就归零）、工具调度异常不毒化 session（不抛异常 + 补齐 tool 配对 + 后续轮次仍可用）、LLM 失败收敛、空输入、完整 trace |
 | `OpenAiCompatibleClientTest` | 16 | wire format（tools/tool_calls/tool_call_id）、思维链不回灌、响应解析、429 重试、5xx 重试上限、401/400 不重试、坏响应、URL 规整、网络错误 |
 | `LlmOutputParserTest` | 16 | 原生 tool_calls、`<tool_call>`、JSON 代码块、ReAct、整段 JSON、去重、防误判、EMPTY、括号配平扫描、中文回答以「分析：/思考：/推理：」开头不被当思维链删掉、文本兜底只接受已注册工具名、原生 tool_calls 不做名字过滤 |
