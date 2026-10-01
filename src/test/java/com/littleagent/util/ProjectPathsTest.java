@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 路径向上查找：终止条件必须是「项目根锚点」，不能是写死的层数。
  *
  * <p>这是实测出来的坑：早期实现写死「向上 4 层」（含 CWD），从
- * {@code src/main/java/com/miniagent}（距根 4 层）启动时刚好差一层 ——
+ * {@code src/main/java/com/littleagent}（距根 4 层）启动时刚好差一层 ——
  * {@code search} 静默返回「知识库为空」、{@code .env.local} 读不到，
  * 而且症状与「README 声称已修复的那个问题」一模一样。
  */
@@ -30,7 +30,7 @@ class ProjectPathsTest {
     void findsDirectoryFromDeepWorkingDirectory() throws Exception {
         Files.createFile(root.resolve("pom.xml"));
         Path knowledge = Files.createDirectories(root.resolve("docs/knowledge"));
-        Path deep = Files.createDirectories(root.resolve("src/main/java/com/miniagent"));
+        Path deep = Files.createDirectories(root.resolve("src/main/java/com/littleagent"));
 
         Path found = ProjectPaths.findUpwards(deep, Path.of("docs", "knowledge"));
 

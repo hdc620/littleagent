@@ -344,22 +344,40 @@ public final class AgentRuntime implements AutoCloseable {
         }
     }
 
-    /** 完全不依赖模型的兜底回答：把本轮拿到的工具结果汇总给用户。 */
+    /**
+     * 完全不依赖模型的兜底回答：把<b>本轮</b>拿到的工具结果汇总给用户。
+     *
+     * <p><b>只汇总本轮</b>：从「本轮 user 消息」之后到现在的 tool 消息才算数。
+     * 早期实现遍历整个 session.history()，于是跨轮次对话里会把**上一轮甚至更早**的
+     * 工具结果也列出来，误导用户以为那些是本轮新拿到的；而且「没有成功的工具结果」
+     * 这句提示只要历史里任何位置有过 tool 消息就永远打不出来。
+     */
     private String deterministicWrapUp(Session session, String userInput) {
         StringBuilder sb = new StringBuilder();
         sb.append("已达到单轮工具调用上限（").append(config.maxSteps()).append(" 次），先把目前拿到的事实汇总给你：\n");
-        int index = 1;
-        for (Message message : session.history()) {
+        List<Message> history = session.history();
+        // 本轮起点：最后一条 user 消息的下标。tool 消息只会出现在它之后。
+        int turnStart = -1;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (history.get(i).role() == com.littleagent.llm.Role.USER) {
+                turnStart = i;
+                break;
+            }
+        }
+        int shown = 0;
+        for (int i = Math.max(0, turnStart); i < history.size(); i++) {
+            Message message = history.get(i);
             if (message.role() == com.littleagent.llm.Role.TOOL) {
-                sb.append(index++).append(". [").append(message.toolName()).append("] ")
+                sb.append(shown + 1).append(". [").append(message.toolName()).append("] ")
                         .append(Texts.oneLine(message.content(), 200)).append('\n');
-                if (index > 6) {
+                shown++;
+                if (shown >= 6) {
                     break;
                 }
             }
         }
-        if (index == 1) {
-            sb.append("（本轮没有成功的工具结果）\n");
+        if (shown == 0) {
+            sb.append("（本轮没有拿到任何工具结果）\n");
         }
         sb.append("可以继续追问，或让我换个方式处理「").append(Texts.oneLine(userInput, 40)).append("」。");
         return sb.toString();

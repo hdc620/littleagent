@@ -1,6 +1,6 @@
 # 系统设计
 
-> 对应代码：`src/main/java/com/miniagent`。本文档说明**为什么这样设计**，接口细节见 [`API.md`](API.md)。
+> 对应代码：`src/main/java/com/littleagent`。本文档说明**为什么这样设计**，接口细节见 [`API.md`](API.md)。
 
 ---
 

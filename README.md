@@ -4,7 +4,7 @@
 > LLM 输出解析、多 session 隔离、上下文旅程压缩与记忆召回、异常处理与全链路 trace。
 > 使用**真实 LLM API**（DeepSeek / 任意 OpenAI 兼容网关）。
 
-[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-216%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
+[![Java](https://img.shields.io/badge/Java-17+-blue)]() [![Tests](https://img.shields.io/badge/tests-217%20unit%20%2B%205%20live-green)]() [![Deps](https://img.shields.io/badge/runtime%20deps-jackson%20only-orange)]()
 
 ---
 
@@ -68,7 +68,7 @@ cp .env.example .env.local      # Windows: copy .env.example .env.local
 ### 2.3 编译与测试
 
 ```bash
-mvn clean package                 # 编译 + 跑 216 个单元测试 + 打可执行 jar → target/little-agent.jar
+mvn clean package                 # 编译 + 跑 217 个单元测试 + 打可执行 jar → target/little-agent.jar
 mvn verify                        # 额外跑 5 个真实 API 集成测试（无 Key 时自动跳过）
 mvn "-Dtest=AgentLoopTest" test    # 只跑某个测试类
 ```
@@ -110,7 +110,7 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 1. **导入**：`File → Open` → 选中项目根目录的 `pom.xml` → `Open as Project`（IDEA 自动 Maven 导入）。
 2. **确认 SDK**：`File → Project Structure → Project`，SDK 选 **JDK 17 或更高**（`pom.xml` 里编译目标是 `release 17`），
    Language level 选 17。建议同时确认 `Settings → Build → Build Tools → Maven → Runner` 的 JRE 与项目一致。
-3. **运行入口**：右键 `src/main/java/com/miniagent/Main.java` → `Run 'Main.main()'`。
+3. **运行入口**：右键 `src/main/java/com/littleagent/Main.java` → `Run 'Main.main()'`。
    不传参数即进入**交互式多窗口 REPL**（IDEA 控制台可以直接输入中文）。
 4. **已内置 5 个 Run Configuration**（`.idea/runConfigurations/`，导入后自动出现在运行下拉框里）：
 
@@ -124,7 +124,7 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 
    > 若下拉框提示 `Module not specified`，手动选一下 `little-agent` 模块即可（IDEA 按 artifactId 生成模块名）。
 
-5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（216 个单元测试，离线，几秒）。
+5. **跑测试**：右键 `src/test/java` → `Run 'All Tests'`（217 个单元测试，离线，几秒）。
    `DeepSeekLiveIT` 也可以直接右键运行——IDEA 不区分 failsafe，`@Test` 就会执行；没有 Key 时它会自动 skip。
 
 6. **三个常见坑**（前两个已修复，列出来便于排查）：
@@ -163,7 +163,7 @@ REPL 命令：`/new`（新窗口）、`/use`（切换窗口）、`/sessions`（�
 | 异常处理 | 异常体系 + 9 项工具防护 + LLM 重试 | `ToolInvokerTest`、`AgentLoopTest#llmFailureBecomesResult` |
 | 工具 trace / 执行日志 | `Tracer` + `JsonlTraceSink` | `TraceTest`（8 例） |
 | 真实 LLM API | `OpenAiCompatibleClient` → DeepSeek | `DeepSeekLiveIT`（5 例）+ 第 10 节实测记录 |
-| 测试用例 | 216 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
+| 测试用例 | 217 单元测试 + 5 真实 API 集成测试 | `mvn verify` |
 
 ---
 
@@ -389,7 +389,7 @@ CLI 侧：`/new` 开窗口、`/sessions` 看全部窗口、`/use` 切换 —— 
 ### 9.1 运行
 
 ```bash
-mvn test        # 216 个单元测试（离线，约 3 秒，不花 API 费用）
+mvn test        # 217 个单元测试（离线，约 3 秒，不花 API 费用）
 mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 ```
 
@@ -482,8 +482,8 @@ mvn verify      # 额外 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key
 │   ├── TESTING.md               测试用例清单与运行说明
 │   ├── DEMO.md / DEMO-mock.md   真实 API / 离线 运行记录
 │   └── knowledge/*.md           内置知识库（search/read_docs 的数据源）
-├── src/main/java/com/miniagent/ 源码（见第 4 节分层）
-├── src/test/java/com/miniagent/ 测试（216 单元 + 5 集成）
+├── src/main/java/com/littleagent/ 源码（见第 4 节分层）
+├── src/test/java/com/littleagent/ 测试（217 单元 + 5 集成）
 └── logs/                        运行期 trace（JSONL）；运行期才产生，未提交（`.gitignore` 忽略 `logs/` 与 `*.jsonl`）
 ```
 

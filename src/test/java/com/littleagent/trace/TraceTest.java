@@ -123,11 +123,18 @@ class TraceTest {
     }
 
     @Test
-    @DisplayName("ConsoleTraceSink 可输出事件摘要")
+    @DisplayName("ConsoleTraceSink 可输出事件摘要，且不抛异常")
     void consoleSinkPrints() {
-        new ConsoleTraceSink(false).accept(new TraceEvent(1, java.time.Instant.now(), "w1",
+        // 把输出重定向到内存流，既验证「能输出」也验证「不抛异常」，
+        // 不再用 assertTrue(true) 这种恒真断言。
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+        ConsoleTraceSink sink = new ConsoleTraceSink(false, new java.io.PrintStream(buffer, true,
+                java.nio.charset.StandardCharsets.UTF_8));
+        sink.accept(new TraceEvent(1, java.time.Instant.now(), "w1",
                 TraceTypes.FINAL_ANSWER, "完成", Map.of("steps", 2), 15));
-        // 只要求不抛异常（输出内容属人工检查范围）
-        assertTrue(true);
+
+        String output = buffer.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(output.contains("完成"), "应输出事件摘要，实际：" + output);
+        assertTrue(output.contains("steps"), "应包含事件数据");
     }
 }

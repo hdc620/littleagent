@@ -8,7 +8,7 @@
 ## 1. 运行方式
 
 ```bash
-mvn test                       # 216 个单元测试（离线、约 3 秒、零 API 费用）
+mvn test                       # 217 个单元测试（离线、约 3 秒、零 API 费用）
 mvn verify                     # 额外运行 5 个真实 API 集成测试（DeepSeekLiveIT，无 Key 自动跳过）
 mvn "-Dtest=AgentLoopTest" test             # 单个测试类
 mvn "-Dtest=AgentLoopTest#forcesWrapUpAtMaxSteps" test   # 单个用例
@@ -19,7 +19,7 @@ mvn "-Dmaven.repo.local=.m2repo" test       # 仅在受限沙箱中需要（本�
 
 | 阶段 | 用例数 | 结果 |
 | --- | --- | --- |
-| `mvn test`（单元） | 216 | ✅ 全部通过 |
+| `mvn test`（单元） | 217 | ✅ 全部通过 |
 | `mvn verify`（含真实 API） | +5 | ✅ 全部通过（无 Key 时 skip） |
 
 ---
@@ -183,7 +183,7 @@ CJK bigram 分词与**标点排除**（回归问题 3）、单字保留、token 
 
 | 用例 | 断言要点 |
 | --- | --- |
-| `findsDirectoryFromDeepWorkingDirectory` | 从距项目根 **4 层以上**（`src/main/java/com/miniagent`，再深到 `a/b/c/d/e/f/g`）也能定位到 `docs/knowledge`（旧实现只上溯 3 层，会静默「知识库为空」） |
+| `findsDirectoryFromDeepWorkingDirectory` | 从距项目根 **4 层以上**（`src/main/java/com/littleagent`，再深到 `a/b/c/d/e/f/g`）也能定位到 `docs/knowledge`（旧实现只上溯 3 层，会静默「知识库为空」） |
 | `stopsAtProjectRoot` | 越过项目根就不再向上找：即使外层存在同名 `docs/knowledge` 也不命中，返回原相对路径由调用方降级 |
 | `keepsAbsolutePathUntouched` | 绝对路径原样返回，不受 CWD 影响 |
 | `configSearchDirsGoesUpToProjectRoot` | 配置查找目录从近到远（最近的排最前），包含项目根且**以项目根结尾**，不含项目根的父目录 |
@@ -231,7 +231,7 @@ CJK bigram 分词与**标点排除**（回归问题 3）、单字保留、token 
 ## 5. 覆盖度自检
 
 ```bash
-mvn test                       # 216 passed
+mvn test                       # 217 passed
 mvn verify                     # + 5 live passed（需 Key）
 git grep -c "assert" -- src/test   # 断言密度检查
 ```

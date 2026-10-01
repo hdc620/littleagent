@@ -16,7 +16,7 @@ import java.util.List;
  * <h2>为什么不用「向上找 N 层」</h2>
  * 早期实现写死了「向上 4 层」。问题是这个数字**同时**是上界和实现细节：
  * <ul>
- *   <li>从 {@code src/main/java/com/miniagent}（距根 4 层）启动就刚好差一层，症状与被修复前一模一样；</li>
+ *   <li>从 {@code src/main/java/com/littleagent}（距根 4 层）启动就刚好差一层，症状与被修复前一模一样；</li>
  *   <li>写太大又会命中项目之外的无关目录（例如用户家目录里的 .env.local）。</li>
  * </ul>
  * 正确做法是找一个**语义锚点**：一路向上，直到看见 {@code pom.xml} / {@code .git} 这类

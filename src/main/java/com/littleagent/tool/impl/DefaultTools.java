@@ -38,7 +38,7 @@ public final class DefaultTools {
      *
      * <p>查找终止条件是**项目根锚点**（{@code pom.xml} / {@code .git} 等，见
      * {@link com.littleagent.util.ProjectPaths}），而不是写死的层数：写死层数时，
-     * 从 {@code src/main/java/com/miniagent}（距根 4 层）启动就会刚好差一层，
+     * 从 {@code src/main/java/com/littleagent}（距根 4 层）启动就会刚好差一层，
      * 症状与被修复前一模一样。
      *
      * @param configured 配置里的目录（可为相对路径或绝对路径，null 表示默认 docs/knowledge）

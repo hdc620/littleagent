@@ -147,6 +147,36 @@ class AgentLoopTest {
     }
 
     @Test
+    @DisplayName("确定性兜底只汇总本轮的工具结果，不把上一轮的混进来")
+    void deterministicWrapUpOnlySummarizesCurrentTurn() {
+        // 第一轮：正常记一条待办（产生 todo 工具结果，留在历史里）
+        ScriptedLlmClient llm = ScriptedLlmClient.create(
+                ScriptedLlmClient.call("todo", "{\"action\":\"add\",\"item\":\"第一轮的任务\"}"),
+                ScriptedLlmClient.text("已记录。"))
+                .onExhausted(null);
+        runtime = runtime(llm, 6);
+        runtime.run("A", "w1", "记个待办：第一轮的任务");
+
+        // 第二轮：模型请求工具后达到 maxSteps=1，强制收尾也失败 -> 走确定性兜底
+        // 用一个新的 scripted client，第一个响应是工具调用，之后 null（收尾失败）
+        ScriptedLlmClient llm2 = ScriptedLlmClient.create(
+                ScriptedLlmClient.call("weather", "{\"city\":\"上海\"}"))
+                .onExhausted(null);
+        AgentConfig config = config(1).build();
+        runtime = AgentRuntime.builder(config).llm(llm2)
+                .toolRegistry(com.littleagent.tool.impl.DefaultTools.registry(null))
+                .summarizer(new com.littleagent.context.DeterministicSummarizer()).build();
+
+        AgentResult result = runtime.run("A", "w1", "查上海天气");
+
+        assertEquals(AgentResult.Status.MAX_STEPS, result.status());
+        // 关键断言：兜底文案只能含本轮的 weather（上海），不能含上一轮的 todo（第一轮的任务）
+        assertTrue(result.answer().contains("上海"), "应汇总本轮 weather 结果");
+        assertFalse(result.answer().contains("第一轮的任务"),
+                "不应把上一轮的 todo 结果当成当前轮汇总给用户");
+    }
+
+    @Test
     @DisplayName("工具报错时循环继续，错误作为 observation 回灌给模型")
     void toolErrorIsFedBackAndLoopContinues() {
         ScriptedLlmClient llm = ScriptedLlmClient.create(

@@ -86,7 +86,7 @@ public final class EnvLoader {
     private static Map<String, String> loadFiles() {
         Map<String, String> values = new HashMap<>();
         // 从 CWD 向上读到项目根（pom.xml/.git）为止，而不是写死「向上 N 层」：
-        // 写死层数时，从 src/main/java/com/miniagent 这类深层目录启动就会差一层、静默读不到配置。
+        // 写死层数时，从 src/main/java/com/littleagent 这类深层目录启动就会差一层、静默读不到配置。
         for (Path dir : ProjectPaths.configSearchDirs(Paths.get("").toAbsolutePath())) {
             readInto(values, dir.resolve(".env"));
             readInto(values, dir.resolve(".env.local"));

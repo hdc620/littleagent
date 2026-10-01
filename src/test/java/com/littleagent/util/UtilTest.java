@@ -64,12 +64,17 @@ class UtilTest {
     }
 
     @Test
-    @DisplayName("EnvLoader：缺失键返回默认值，环境变量优先于文件")
+    @DisplayName("EnvLoader：缺失键返回默认值，配置快照幂等")
     void envLoaderDefaults() {
         assertEquals("fallback", EnvLoader.get("LITTLE_AGENT_NOT_EXIST_KEY_XYZ", "fallback"));
         assertEquals(7, EnvLoader.getInt("LITTLE_AGENT_NOT_EXIST_KEY_XYZ", 7));
         assertTrue(EnvLoader.getBool("LITTLE_AGENT_NOT_EXIST_KEY_XYZ", true));
-        // 当前测试进程的工作目录是项目根目录，.env.local 里的 DEEPSEEK_API_KEY 可被读到（若存在）
-        assertTrue(EnvLoader.all().size() >= 0);
+        // 配置快照应幂等：两次读取返回同一份（有缓存），且内容一致。
+        // 注意「环境变量优先于文件」这一层在这里不测——System.getenv 在测试进程里只读、无法注入，
+        // 该语义由 EnvLoader.get 的实现顺序保证（先 getenv 再查文件），属于代码结构而非可注入行为。
+        var first = EnvLoader.all();
+        var second = EnvLoader.all();
+        assertTrue(first == second || first.equals(second), "两次 all() 应返回同一份快照");
+        assertEquals(first.size(), second.size(), "快照大小应稳定");
     }
 }

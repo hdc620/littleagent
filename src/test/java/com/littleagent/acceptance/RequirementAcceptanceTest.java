@@ -563,11 +563,30 @@ class RequirementAcceptanceTest {
     class Requirement3Tests {
 
         @Test
-        @DisplayName("验收测试本身可运行（能在 IDEA 里一键跑绿）；单测 & 集成测试的分层见 docs/TESTING.md")
+        @DisplayName("要求 3：构建了测试用例来测试以上功能（验收 + 单元 + 集成三层都真实存在）")
         void acceptanceSuiteRuns() {
-            // 这一条是自指的：本类 30+ 个用例全绿，就证明「构建了测试用例来测试以上功能」。
-            // 单元/集成分工：mvn test = 离线单测；mvn verify = 额外跑 DeepSeekLiveIT（真实 API 5 例）。
-            assertTrue(true);
+            // 不再用恒真断言：改为「真的去验证三层测试都存在」。
+            // 1) 验收测试（本类）确实在跑 —— 走到这里本身就说明它可运行；
+            // 2) 集成测试类存在，且带 @Tag("live")（无 Key 时能被 mvn verify 正确跳过）；
+            // 3) 单元测试类真实存在（抽样几个核心类，避免「只有验收测试没有单元测试」）。
+            try {
+                Class<?> liveIt = Class.forName("com.littleagent.core.DeepSeekLiveIT");
+                assertTrue(java.util.Arrays.stream(liveIt.getDeclaredAnnotations())
+                                .anyMatch(a -> a.annotationType().getName().contains("Tag")),
+                        "DeepSeekLiveIT 应带 @Tag 标注，便于 surefire/failsafe 分组");
+            } catch (ClassNotFoundException e) {
+                throw new AssertionError("缺少真实 API 集成测试类 com.littleagent.core.DeepSeekLiveIT", e);
+            }
+            for (String unitTest : new String[]{
+                    "com.littleagent.core.AgentLoopTest",
+                    "com.littleagent.context.ContextManagerTest",
+                    "com.littleagent.tool.ToolInvokerTest"}) {
+                try {
+                    Class.forName(unitTest);
+                } catch (ClassNotFoundException e) {
+                    throw new AssertionError("缺少单元测试类 " + unitTest, e);
+                }
+            }
         }
     }
 
