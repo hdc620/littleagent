@@ -531,6 +531,7 @@ git push -u origin main
 | --- | --- |
 | [`docs/API.md`](docs/API.md) | **Java 接口文档**：全部公开类/方法签名、契约、错误码表、扩展指南 |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 系统设计：分层、时序、数据结构、上下文与记忆策略、权衡记录 |
+| [`docs/ARCH-设计题4-Agent幂等性与重试.md`](docs/ARCH-设计题4-Agent幂等性与重试.md) | **架构设计题作答（第 4 题）**：幂等性分类、工具语义声明、幂等键与去重账本、超时后「结果未知」的处置；每节都对应到本仓库的真实代码与已知缺口 |
 | [`docs/AI_PROMPTS.md`](docs/AI_PROMPTS.md) | **AI Prompt 与问题解决记录**：开发中使用的提示词、真实踩坑与修复过程 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试用例清单、运行方式、覆盖矩阵与断言意图 |
 | [`docs/DEMO.md`](docs/DEMO.md) | 真实 DeepSeek API 的完整运行记录 |
